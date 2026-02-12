@@ -1,0 +1,24 @@
+[package]
+name = "arachne"
+version = "0.1.0"
+edition = "2021"
+description = "TUI git network graph viewer — replaces GitHub's Network tab"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+git2 = "0.20"
+octocrab = "0.44"
+tokio = { version = "1", features = ["full"] }
+notify = "8.0"
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+itertools = "0.14"
+chrono = { version = "0.4", features = ["serde"] }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

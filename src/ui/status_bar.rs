@@ -1,0 +1,93 @@
+use crate::ui::theme;
+use ratatui::{
+    buffer::Buffer as Buf,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::Widget,
+};
+
+pub struct StatusBar<'a> {
+    pub repo_name: &'a str,
+    pub branch_name: &'a str,
+    pub last_sync: &'a str,
+    pub rate_limit: Option<u32>,
+    pub filter_mode: bool,
+    pub filter_text: &'a str,
+}
+
+impl<'a> Widget for StatusBar<'a> {
+    fn render(self, area: Rect, buf: &mut Buf) {
+        let bg = Style::default().bg(theme::STATUS_BG);
+        for x in area.x..area.right() {
+            buf[(x, area.y)].set_style(bg);
+        }
+
+        if self.filter_mode {
+            let line = Line::from(vec![
+                Span::styled(
+                    " /",
+                    Style::default()
+                        .fg(theme::FILTER_COLOR)
+                        .bg(theme::STATUS_BG)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    self.filter_text.to_string(),
+                    Style::default().bg(theme::STATUS_BG),
+                ),
+                Span::styled(
+                    "▌",
+                    Style::default()
+                        .fg(theme::FILTER_COLOR)
+                        .bg(theme::STATUS_BG),
+                ),
+            ]);
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
+        let mut spans = vec![
+            Span::styled(
+                format!(" repo: {} ", self.repo_name),
+                Style::default().bg(theme::STATUS_BG),
+            ),
+            Span::styled(
+                "│",
+                Style::default()
+                    .fg(theme::BORDER_COLOR)
+                    .bg(theme::STATUS_BG),
+            ),
+            Span::styled(
+                format!(" branch: {} ", self.branch_name),
+                Style::default().bg(theme::STATUS_BG),
+            ),
+            Span::styled(
+                "│",
+                Style::default()
+                    .fg(theme::BORDER_COLOR)
+                    .bg(theme::STATUS_BG),
+            ),
+            Span::styled(
+                format!(" synced: {} ", self.last_sync),
+                Style::default().bg(theme::STATUS_BG),
+            ),
+        ];
+
+        if let Some(remaining) = self.rate_limit {
+            spans.push(Span::styled(
+                "│",
+                Style::default()
+                    .fg(theme::BORDER_COLOR)
+                    .bg(theme::STATUS_BG),
+            ));
+            spans.push(Span::styled(
+                format!(" API: {remaining} "),
+                Style::default().bg(theme::STATUS_BG),
+            ));
+        }
+
+        let line = Line::from(spans);
+        buf.set_line(area.x, area.y, &line, area.width);
+    }
+}
