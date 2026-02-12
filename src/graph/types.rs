@@ -1,4 +1,5 @@
 use crate::git::types::{CommitSource, Oid};
+use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CellSymbol {
@@ -56,6 +57,7 @@ pub struct GraphRow {
     pub message: String,
     pub author: String,
     pub time_ago: String,
+    pub time: DateTime<Utc>,
     pub source: CommitSource,
     pub branch_names: Vec<String>,
     pub tag_names: Vec<String>,

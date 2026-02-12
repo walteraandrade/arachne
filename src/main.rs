@@ -17,6 +17,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use event::AppEvent;
+use notify::RecommendedWatcher;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -33,7 +34,7 @@ async fn main() -> color_eyre_fallback::Result<()> {
     let config = Config::load(cli.repo);
 
     let mut app = App::new(config.clone());
-    if let Err(e) = app.load_repo() {
+    if let Err(e) = app.load_repos() {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
@@ -46,19 +47,25 @@ async fn main() -> color_eyre_fallback::Result<()> {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
-    let repo_path = config
-        .repo_path
-        .canonicalize()
-        .unwrap_or(config.repo_path.clone());
-    let _watcher = watcher::fs::start_fs_watcher(&repo_path, tx.clone()).ok();
+    // Spawn per-repo FS watchers and GitHub pollers
+    let mut _watchers: Vec<RecommendedWatcher> = Vec::new();
+    for (idx, pane) in app.panes.iter().enumerate() {
+        if let Some(ref r) = pane.repo {
+            if let Some(workdir) = r.workdir() {
+                let repo_path = workdir.to_path_buf();
+                if let Ok(w) = watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
+                    _watchers.push(w);
+                }
+            }
+        }
 
-    let poll_tx = tx.clone();
-    let poll_interval = config.poll_interval_secs;
-    let has_github = app.github_client.is_some();
-    if has_github {
-        tokio::spawn(async move {
-            watcher::poll::start_github_poller(poll_tx, poll_interval).await;
-        });
+        if pane.github_client.is_some() {
+            let poll_tx = tx.clone();
+            let poll_interval = config.poll_interval_secs;
+            tokio::spawn(async move {
+                watcher::poll::start_github_poller(poll_tx, idx, poll_interval).await;
+            });
+        }
     }
 
     let input_tx = tx.clone();
@@ -90,8 +97,9 @@ async fn main() -> color_eyre_fallback::Result<()> {
 
         if let Some(event) = rx.recv().await {
             match &event {
-                AppEvent::GitHubUpdate => {
-                    app.fetch_github().await;
+                AppEvent::GitHubUpdate(idx) => {
+                    let idx = *idx;
+                    app.fetch_github(idx).await;
                 }
                 _ => app.handle_event(event),
             }

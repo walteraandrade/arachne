@@ -4,8 +4,8 @@ use crossterm::event::KeyEvent;
 pub enum AppEvent {
     Key(KeyEvent),
     Resize(u16, u16),
-    FsChanged,
-    GitHubUpdate,
+    FsChanged(usize),
+    GitHubUpdate(usize),
     Tick,
     Error(String),
 }

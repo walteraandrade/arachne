@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 pub struct StatusBar<'a> {
-    pub repo_name: &'a str,
+    pub pane_tabs: &'a [(&'a str, bool)],
     pub branch_name: &'a str,
     pub last_sync: &'a str,
     pub rate_limit: Option<u32>,
@@ -47,32 +47,46 @@ impl<'a> Widget for StatusBar<'a> {
             return;
         }
 
-        let mut spans = vec![
-            Span::styled(
-                format!(" repo: {} ", self.repo_name),
-                Style::default().bg(theme::STATUS_BG),
-            ),
-            Span::styled(
-                "│",
+        let mut spans = Vec::new();
+
+        // Pane tabs
+        spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
+        for (name, is_active) in self.pane_tabs {
+            let style = if *is_active {
+                Style::default()
+                    .fg(theme::FILTER_COLOR)
+                    .bg(theme::STATUS_BG)
+                    .add_modifier(Modifier::BOLD)
+            } else {
                 Style::default()
                     .fg(theme::BORDER_COLOR)
-                    .bg(theme::STATUS_BG),
-            ),
-            Span::styled(
-                format!(" branch: {} ", self.branch_name),
-                Style::default().bg(theme::STATUS_BG),
-            ),
-            Span::styled(
-                "│",
-                Style::default()
-                    .fg(theme::BORDER_COLOR)
-                    .bg(theme::STATUS_BG),
-            ),
-            Span::styled(
-                format!(" synced: {} ", self.last_sync),
-                Style::default().bg(theme::STATUS_BG),
-            ),
-        ];
+                    .bg(theme::STATUS_BG)
+            };
+            let short = name.rsplit('/').next().unwrap_or(name);
+            spans.push(Span::styled(format!("[{short}]"), style));
+            spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
+        }
+
+        spans.push(Span::styled(
+            "│",
+            Style::default()
+                .fg(theme::BORDER_COLOR)
+                .bg(theme::STATUS_BG),
+        ));
+        spans.push(Span::styled(
+            format!(" {} ", self.branch_name),
+            Style::default().bg(theme::STATUS_BG),
+        ));
+        spans.push(Span::styled(
+            "│",
+            Style::default()
+                .fg(theme::BORDER_COLOR)
+                .bg(theme::STATUS_BG),
+        ));
+        spans.push(Span::styled(
+            format!(" synced: {} ", self.last_sync),
+            Style::default().bg(theme::STATUS_BG),
+        ));
 
         if let Some(remaining) = self.rate_limit {
             spans.push(Span::styled(

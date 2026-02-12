@@ -15,11 +15,47 @@ pub struct GraphView<'a> {
     pub scroll_x: usize,
     pub selected: usize,
     pub highlighted_oids: &'a std::collections::HashSet<crate::git::types::Oid>,
+    pub repo_name: &'a str,
+    pub is_active: bool,
 }
 
 impl<'a> Widget for GraphView<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        let visible = area.height as usize;
+        if area.height < 2 {
+            return;
+        }
+
+        // Render pane header (1 row)
+        let header_style = if self.is_active {
+            Style::default()
+                .fg(theme::FILTER_COLOR)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::BORDER_COLOR)
+        };
+
+        let header = format!(" {} ", self.repo_name);
+        let header_line = Line::from(Span::styled(header, header_style));
+
+        // Fill header bg
+        let header_bg = if self.is_active {
+            Style::default().bg(theme::STATUS_BG)
+        } else {
+            Style::default()
+        };
+        for x in area.x..area.right() {
+            buf[(x, area.y)].set_style(header_bg);
+        }
+        buf.set_line(area.x, area.y, &header_line, area.width);
+
+        // Graph rows below header
+        let graph_area = Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height - 1,
+        };
+        let visible = graph_area.height as usize;
 
         for (i, row) in self
             .rows
@@ -28,23 +64,23 @@ impl<'a> Widget for GraphView<'a> {
             .take(visible)
             .enumerate()
         {
-            let y = area.y + i as u16;
-            if y >= area.y + area.height {
+            let y = graph_area.y + i as u16;
+            if y >= graph_area.y + graph_area.height {
                 break;
             }
 
             let abs_idx = self.scroll_y + i;
-            let is_selected = abs_idx == self.selected;
+            let is_selected = abs_idx == self.selected && self.is_active;
             let is_highlighted = self.highlighted_oids.contains(&row.oid);
 
             let line = build_row_line(row, is_selected, is_highlighted, self.scroll_x);
             let line_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
 
-            buf.set_line(area.x, y, &line, area.width);
+            buf.set_line(graph_area.x, y, &line, graph_area.width);
 
-            if is_selected && line_width < area.width as usize {
+            if is_selected && line_width < graph_area.width as usize {
                 let fill_style = Style::default().bg(theme::SELECTED_BG);
-                for x in (area.x + line_width as u16)..area.right() {
+                for x in (graph_area.x + line_width as u16)..graph_area.right() {
                     buf[(x, y)].set_style(fill_style);
                 }
             }

@@ -2,12 +2,16 @@ use crate::event::AppEvent;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-pub async fn start_github_poller(tx: mpsc::UnboundedSender<AppEvent>, interval_secs: u64) {
+pub async fn start_github_poller(
+    tx: mpsc::UnboundedSender<AppEvent>,
+    pane_idx: usize,
+    interval_secs: u64,
+) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     interval.tick().await;
 
     loop {
         interval.tick().await;
-        let _ = tx.send(AppEvent::GitHubUpdate);
+        let _ = tx.send(AppEvent::GitHubUpdate(pane_idx));
     }
 }

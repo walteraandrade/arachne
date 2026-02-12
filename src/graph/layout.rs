@@ -70,6 +70,7 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData) -> Vec<GraphRow> {
             message: node.commit.message.clone(),
             author: node.commit.author.clone(),
             time_ago,
+            time: node.commit.time,
             source: node.commit.source.clone(),
             branch_names,
             tag_names,

@@ -25,18 +25,26 @@ pub enum Panel {
     Graph,
 }
 
-pub struct App {
-    pub config: Config,
+pub struct RepoPane {
     pub repo: Option<Repository>,
     pub repo_data: RepoData,
     pub dag: Dag,
     pub rows: Vec<GraphRow>,
     pub repo_name: String,
     pub current_branch: String,
+    pub github_client: Option<GitHubClient>,
+    pub scroll_x: usize,
+    pub last_sync: String,
+    pub rate_limit: Option<u32>,
+}
+
+pub struct App {
+    pub config: Config,
+    pub panes: Vec<RepoPane>,
+    pub active_pane: usize,
 
     pub active_panel: Panel,
     pub graph_scroll_y: usize,
-    pub graph_scroll_x: usize,
     pub graph_selected: usize,
     pub branch_scroll: usize,
     pub branch_selected: usize,
@@ -46,33 +54,17 @@ pub struct App {
     pub filter_mode: bool,
     pub filter_text: String,
 
-    pub last_sync: String,
-    pub rate_limit: Option<u32>,
-    pub github_client: Option<GitHubClient>,
-
     pub should_quit: bool,
 }
 
 impl App {
     pub fn new(config: Config) -> Self {
-        let github_client = config.github_token.as_ref().and_then(|token| {
-            if token.is_empty() {
-                return None;
-            }
-            None // will be set after repo detection
-        });
-
         Self {
             config,
-            repo: None,
-            repo_data: RepoData::default(),
-            dag: Dag::default(),
-            rows: Vec::new(),
-            repo_name: String::new(),
-            current_branch: String::new(),
+            panes: Vec::new(),
+            active_pane: 0,
             active_panel: Panel::Graph,
             graph_scroll_y: 0,
-            graph_scroll_x: 0,
             graph_selected: 0,
             branch_scroll: 0,
             branch_selected: 0,
@@ -80,75 +72,83 @@ impl App {
             show_forks: true,
             filter_mode: false,
             filter_text: String::new(),
-            last_sync: "never".to_string(),
-            rate_limit: None,
-            github_client,
             should_quit: false,
         }
     }
 
-    pub fn load_repo(&mut self) -> Result<()> {
-        let r = repo::open_repo(&self.config.repo_path)?;
-        self.repo_data = repo::read_repo(&r)?;
+    pub fn load_repos(&mut self) -> Result<()> {
+        let entries = self.config.resolved_repos();
+        for entry in &entries {
+            let path = expand_tilde(&entry.path);
+            let r = repo::open_repo(&path)?;
+            let repo_data = repo::read_repo(&r)?;
 
-        self.current_branch = self
-            .repo_data
-            .branches
-            .iter()
-            .find(|b| b.is_head)
-            .map(|b| b.name.clone())
-            .unwrap_or_else(|| "detached".to_string());
+            let current_branch = repo_data
+                .branches
+                .iter()
+                .find(|b| b.is_head)
+                .map(|b| b.name.clone())
+                .unwrap_or_else(|| "detached".to_string());
 
-        self.repo_name = detect_repo_name(&r);
-        self.dag = Dag::from_repo_data(&self.repo_data);
-        self.rows = layout::compute_layout(&self.dag, &self.repo_data);
+            let repo_name = entry
+                .name
+                .clone()
+                .unwrap_or_else(|| detect_repo_name(&r));
 
-        self.init_github_client();
-        self.repo = Some(r);
-        self.last_sync = "just now".to_string();
+            let dag = Dag::from_repo_data(&repo_data);
+            let rows = layout::compute_layout(&dag, &repo_data);
+
+            let github_client = init_github_client(&self.config, &repo_name);
+
+            self.panes.push(RepoPane {
+                repo: Some(r),
+                repo_data,
+                dag,
+                rows,
+                repo_name,
+                current_branch,
+                github_client,
+                scroll_x: 0,
+                last_sync: "just now".to_string(),
+                rate_limit: None,
+            });
+        }
         Ok(())
     }
 
-    fn init_github_client(&mut self) {
-        if let Some(ref token) = self.config.github_token {
-            if !token.is_empty() {
-                let parts: Vec<&str> = self.repo_name.splitn(2, '/').collect();
-                if parts.len() == 2 {
-                    self.github_client = GitHubClient::new(token, parts[0], parts[1]).ok();
+    pub fn rebuild_graph(&mut self, pane_idx: usize) {
+        if let Some(pane) = self.panes.get_mut(pane_idx) {
+            if let Some(ref r) = pane.repo {
+                if let Ok(data) = repo::read_repo(r) {
+                    pane.repo_data = data;
+                    pane.dag = Dag::from_repo_data(&pane.repo_data);
+                    pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data);
+                    pane.last_sync = "just now".to_string();
+                    pane.current_branch = pane
+                        .repo_data
+                        .branches
+                        .iter()
+                        .find(|b| b.is_head)
+                        .map(|b| b.name.clone())
+                        .unwrap_or_else(|| "detached".to_string());
                 }
             }
         }
     }
 
-    pub fn rebuild_graph(&mut self) {
-        if let Some(ref r) = self.repo {
-            if let Ok(data) = repo::read_repo(r) {
-                self.repo_data = data;
-                self.dag = Dag::from_repo_data(&self.repo_data);
-                self.rows = layout::compute_layout(&self.dag, &self.repo_data);
-                self.last_sync = "just now".to_string();
-
-                self.current_branch = self
-                    .repo_data
-                    .branches
-                    .iter()
-                    .find(|b| b.is_head)
-                    .map(|b| b.name.clone())
-                    .unwrap_or_else(|| "detached".to_string());
-            }
-        }
-    }
-
-    pub async fn fetch_github(&mut self) {
-        if let Some(ref client) = self.github_client {
-            let result = network::fetch_network(client, &mut self.dag, &mut self.repo_data).await;
-            match result {
-                Ok(rate) => {
-                    self.rate_limit = rate;
-                    self.rows = layout::compute_layout(&self.dag, &self.repo_data);
-                }
-                Err(e) => {
-                    self.last_sync = format!("error: {e}");
+    pub async fn fetch_github(&mut self, pane_idx: usize) {
+        if let Some(pane) = self.panes.get_mut(pane_idx) {
+            if let Some(ref client) = pane.github_client {
+                let result =
+                    network::fetch_network(client, &mut pane.dag, &mut pane.repo_data).await;
+                match result {
+                    Ok(rate) => {
+                        pane.rate_limit = rate;
+                        pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data);
+                    }
+                    Err(e) => {
+                        pane.last_sync = format!("error: {e}");
+                    }
                 }
             }
         }
@@ -160,11 +160,15 @@ impl App {
                 let action = input::map_key(key, self.filter_mode);
                 self.handle_action(action);
             }
-            AppEvent::FsChanged => self.rebuild_graph(),
-            AppEvent::GitHubUpdate => {}
+            AppEvent::FsChanged(idx) => self.rebuild_graph(idx),
+            AppEvent::GitHubUpdate(_) => {}
             AppEvent::Resize(_, _) => {}
             AppEvent::Tick => {}
-            AppEvent::Error(msg) => self.last_sync = format!("error: {msg}"),
+            AppEvent::Error(msg) => {
+                if let Some(pane) = self.panes.get_mut(self.active_pane) {
+                    pane.last_sync = format!("error: {msg}");
+                }
+            }
         }
     }
 
@@ -173,28 +177,54 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::ScrollDown => match self.active_panel {
                 Panel::Graph => {
-                    if self.graph_selected + 1 < self.rows.len() {
-                        self.graph_selected += 1;
+                    if let Some(pane) = self.panes.get(self.active_pane) {
+                        if self.graph_selected + 1 < pane.rows.len() {
+                            self.graph_selected += 1;
+                            self.sync_pane_scroll();
+                        }
                     }
                 }
                 Panel::Branches => self.branch_selected += 1,
             },
             Action::ScrollUp => match self.active_panel {
                 Panel::Graph => {
-                    self.graph_selected = self.graph_selected.saturating_sub(1);
+                    if self.graph_selected > 0 {
+                        self.graph_selected = self.graph_selected.saturating_sub(1);
+                        self.sync_pane_scroll();
+                    }
                 }
                 Panel::Branches => {
                     self.branch_selected = self.branch_selected.saturating_sub(1);
                 }
             },
             Action::ScrollLeft => {
-                self.graph_scroll_x = self.graph_scroll_x.saturating_sub(4);
+                if let Some(pane) = self.panes.get_mut(self.active_pane) {
+                    pane.scroll_x = pane.scroll_x.saturating_sub(4);
+                }
             }
             Action::ScrollRight => {
-                self.graph_scroll_x += 4;
+                if let Some(pane) = self.panes.get_mut(self.active_pane) {
+                    pane.scroll_x += 4;
+                }
             }
             Action::PanelLeft => self.active_panel = Panel::Branches,
             Action::PanelRight => self.active_panel = Panel::Graph,
+            Action::NextPane => {
+                if !self.panes.is_empty() {
+                    self.active_pane = (self.active_pane + 1) % self.panes.len();
+                    self.clamp_selected();
+                }
+            }
+            Action::PrevPane => {
+                if !self.panes.is_empty() {
+                    self.active_pane = if self.active_pane == 0 {
+                        self.panes.len() - 1
+                    } else {
+                        self.active_pane - 1
+                    };
+                    self.clamp_selected();
+                }
+            }
             Action::Select => {
                 self.show_detail = !self.show_detail;
             }
@@ -210,10 +240,50 @@ impl App {
                     self.filter_text.clear();
                 }
             }
-            Action::Refresh => self.rebuild_graph(),
+            Action::Refresh => {
+                for idx in 0..self.panes.len() {
+                    self.rebuild_graph(idx);
+                }
+            }
             Action::ClosePopup => self.show_detail = false,
             Action::None => {}
         }
+    }
+
+    fn clamp_selected(&mut self) {
+        if let Some(pane) = self.panes.get(self.active_pane) {
+            if !pane.rows.is_empty() && self.graph_selected >= pane.rows.len() {
+                self.graph_selected = pane.rows.len() - 1;
+            }
+        }
+    }
+
+    fn sync_pane_scroll(&self) {
+        // Time-sync is handled during render via scroll_y_for_pane
+    }
+
+    fn scroll_y_for_pane(&self, pane_idx: usize, visible_height: usize) -> usize {
+        if pane_idx == self.active_pane {
+            return self.graph_scroll_y;
+        }
+
+        let active = match self.panes.get(self.active_pane) {
+            Some(p) => p,
+            None => return 0,
+        };
+        let target = match self.panes.get(pane_idx) {
+            Some(p) => p,
+            None => return 0,
+        };
+
+        let anchor_time = match active.rows.get(self.graph_selected) {
+            Some(row) => row.time,
+            None => return 0,
+        };
+
+        let closest_idx = find_closest_by_time(&target.rows, anchor_time);
+
+        closest_idx.saturating_sub(visible_height / 2)
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
@@ -229,13 +299,15 @@ impl App {
             .constraints([Constraint::Length(25), Constraint::Min(1)])
             .split(main_chunks[0]);
 
-        self.ensure_scroll_bounds(body_chunks[1].height as usize);
+        let graph_area = body_chunks[1];
+        let visible_height = graph_area.height as usize;
+
+        self.ensure_scroll_bounds(visible_height);
 
         let highlighted: HashSet<_> = self.get_highlighted_oids();
 
         let branch_panel = BranchPanel {
-            branches: &self.repo_data.branches,
-            tags: &self.repo_data.tags,
+            panes: &self.panes,
             selected: self.branch_selected,
             scroll: self.branch_scroll,
             filter: &self.filter_text,
@@ -244,29 +316,69 @@ impl App {
         };
         frame.render_widget(branch_panel, body_chunks[0]);
 
-        let graph_view = GraphView {
-            rows: &self.rows,
-            scroll_y: self.graph_scroll_y,
-            scroll_x: self.graph_scroll_x,
-            selected: self.graph_selected,
-            highlighted_oids: &highlighted,
-        };
-        frame.render_widget(graph_view, body_chunks[1]);
+        // Split graph area into N panes
+        let pane_count = self.panes.len().max(1);
+        let constraints: Vec<Constraint> = (0..pane_count)
+            .map(|_| Constraint::Ratio(1, pane_count as u32))
+            .collect();
+        let pane_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(constraints)
+            .split(graph_area);
 
+        for (idx, pane) in self.panes.iter().enumerate() {
+            let is_active = idx == self.active_pane;
+            let pane_scroll_y = self.scroll_y_for_pane(idx, visible_height.saturating_sub(1));
+            let selected = if is_active {
+                self.graph_selected
+            } else {
+                find_closest_by_time(
+                    &pane.rows,
+                    self.panes
+                        .get(self.active_pane)
+                        .and_then(|p| p.rows.get(self.graph_selected))
+                        .map(|r| r.time)
+                        .unwrap_or_default(),
+                )
+            };
+
+            let graph_view = GraphView {
+                rows: &pane.rows,
+                scroll_y: pane_scroll_y,
+                scroll_x: pane.scroll_x,
+                selected,
+                highlighted_oids: &highlighted,
+                repo_name: &pane.repo_name,
+                is_active,
+            };
+            frame.render_widget(graph_view, pane_chunks[idx]);
+        }
+
+        // Status bar — show pane tabs
+        let pane_names: Vec<(&str, bool)> = self
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.repo_name.as_str(), i == self.active_pane))
+            .collect();
+
+        let active = self.panes.get(self.active_pane);
         let status = StatusBar {
-            repo_name: &self.repo_name,
-            branch_name: &self.current_branch,
-            last_sync: &self.last_sync,
-            rate_limit: self.rate_limit,
+            pane_tabs: &pane_names,
+            branch_name: active.map(|p| p.current_branch.as_str()).unwrap_or(""),
+            last_sync: active.map(|p| p.last_sync.as_str()).unwrap_or("never"),
+            rate_limit: active.and_then(|p| p.rate_limit),
             filter_mode: self.filter_mode,
             filter_text: &self.filter_text,
         };
         frame.render_widget(status, main_chunks[1]);
 
         if self.show_detail {
-            if let Some(row) = self.rows.get(self.graph_selected) {
-                let detail = DetailPanel { row };
-                frame.render_widget(detail, size);
+            if let Some(pane) = self.panes.get(self.active_pane) {
+                if let Some(row) = pane.rows.get(self.graph_selected) {
+                    let detail = DetailPanel { row };
+                    frame.render_widget(detail, size);
+                }
             }
         }
     }
@@ -286,12 +398,58 @@ impl App {
     fn get_highlighted_oids(&self) -> HashSet<crate::git::types::Oid> {
         let mut set = HashSet::new();
         if self.active_panel == Panel::Branches {
-            if let Some(branch) = self.repo_data.branches.get(self.branch_selected) {
-                set.insert(branch.tip.clone());
+            // Highlight from active pane's branches
+            if let Some(pane) = self.panes.get(self.active_pane) {
+                if let Some(branch) = pane.repo_data.branches.get(self.branch_selected) {
+                    set.insert(branch.tip.clone());
+                }
             }
         }
         set
     }
+}
+
+fn find_closest_by_time(
+    rows: &[GraphRow],
+    target: chrono::DateTime<chrono::Utc>,
+) -> usize {
+    if rows.is_empty() {
+        return 0;
+    }
+    // Rows are in topo order (newest first). Binary search by time.
+    let mut best = 0;
+    let mut best_diff = i64::MAX;
+    for (i, row) in rows.iter().enumerate() {
+        let diff = (row.time - target).num_seconds().abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best = i;
+        }
+    }
+    best
+}
+
+fn init_github_client(config: &Config, repo_name: &str) -> Option<GitHubClient> {
+    let token = config.github_token.as_ref()?;
+    if token.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = repo_name.splitn(2, '/').collect();
+    if parts.len() == 2 {
+        GitHubClient::new(token, parts[0], parts[1]).ok()
+    } else {
+        None
+    }
+}
+
+fn expand_tilde(path: &std::path::Path) -> std::path::PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(&s[2..]);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn detect_repo_name(repo: &Repository) -> String {

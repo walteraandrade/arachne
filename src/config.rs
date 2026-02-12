@@ -6,12 +6,20 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoEntry {
+    pub path: PathBuf,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub repo_path: PathBuf,
     pub github_token: Option<String>,
     pub poll_interval_secs: u64,
     pub show_forks: bool,
     pub max_commits: usize,
+    #[serde(default)]
+    pub repos: Vec<RepoEntry>,
 }
 
 impl Default for Config {
@@ -22,6 +30,7 @@ impl Default for Config {
             poll_interval_secs: 60,
             show_forks: true,
             max_commits: 500,
+            repos: Vec::new(),
         }
     }
 }
@@ -47,6 +56,17 @@ impl Config {
         }
 
         figment.extract().unwrap_or_default()
+    }
+
+    pub fn resolved_repos(&self) -> Vec<RepoEntry> {
+        if self.repos.is_empty() {
+            vec![RepoEntry {
+                path: self.repo_path.clone(),
+                name: None,
+            }]
+        } else {
+            self.repos.clone()
+        }
     }
 }
 
