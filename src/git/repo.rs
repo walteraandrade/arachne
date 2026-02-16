@@ -15,7 +15,7 @@ pub fn read_repo(repo: &Repository) -> Result<RepoData> {
     data.branches = list_branches(repo)?;
     data.tags = list_tags(repo)?;
     data.head = resolve_head(repo);
-    data.branch_tips = data.branches.iter().map(|b| b.tip.clone()).collect();
+    data.branch_tips = data.branches.iter().map(|b| b.tip).collect();
     data.commits = topo_walk(repo)?;
 
     Ok(data)
@@ -39,7 +39,7 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
             .get()
             .target()
             .map(Oid::from_git2)
-            .unwrap_or(Oid([0; 20]));
+            .unwrap_or(Oid::zero());
         let is_head = head_oid.as_ref() == Some(&tip) && branch.is_head();
         out.push(BranchInfo {
             name,
@@ -56,12 +56,15 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
             .get()
             .target()
             .map(Oid::from_git2)
-            .unwrap_or(Oid([0; 20]));
+            .unwrap_or(Oid::zero());
+        let remote_name = name.find('/')
+            .map(|i| name[..i].to_string())
+            .unwrap_or_else(|| "origin".to_string());
         out.push(BranchInfo {
             name,
             tip,
             is_head: false,
-            source: CommitSource::Local,
+            source: CommitSource::Remote(remote_name),
         });
     }
 

@@ -3,6 +3,7 @@ use figment::{
     Figment,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,7 +12,7 @@ pub struct RepoEntry {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub repo_path: PathBuf,
     pub github_token: Option<String>,
@@ -20,6 +21,30 @@ pub struct Config {
     pub max_commits: usize,
     #[serde(default)]
     pub repos: Vec<RepoEntry>,
+    #[serde(default = "default_trunk_branches")]
+    pub trunk_branches: Vec<String>,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("repo_path", &self.repo_path)
+            .field("github_token", &self.github_token.as_ref().map(|_| "[REDACTED]"))
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("show_forks", &self.show_forks)
+            .field("max_commits", &self.max_commits)
+            .field("repos", &self.repos)
+            .field("trunk_branches", &self.trunk_branches)
+            .finish()
+    }
+}
+
+fn default_trunk_branches() -> Vec<String> {
+    vec![
+        "development".to_string(),
+        "staging".to_string(),
+        "production".to_string(),
+    ]
 }
 
 impl Default for Config {
@@ -31,6 +56,7 @@ impl Default for Config {
             show_forks: true,
             max_commits: 500,
             repos: Vec::new(),
+            trunk_branches: default_trunk_branches(),
         }
     }
 }
@@ -55,7 +81,13 @@ impl Config {
             figment = figment.merge(Serialized::default("repo_path", path));
         }
 
-        figment.extract().unwrap_or_default()
+        match figment.extract() {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("warning: config parse error, using defaults: {e}");
+                Config::default()
+            }
+        }
     }
 
     pub fn resolved_repos(&self) -> Vec<RepoEntry> {

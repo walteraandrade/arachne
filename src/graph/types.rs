@@ -56,7 +56,6 @@ pub struct GraphRow {
     pub oid: Oid,
     pub message: String,
     pub author: String,
-    pub time_ago: String,
     pub time: DateTime<Utc>,
     pub source: CommitSource,
     pub branch_names: Vec<String>,
@@ -67,19 +66,30 @@ pub struct GraphRow {
 #[derive(Clone, Debug, Default)]
 pub struct LayoutState {
     pub columns: Vec<Option<Oid>>,
+    pub reserved_count: usize,
 }
 
 impl LayoutState {
+    pub fn new(reserved: usize) -> Self {
+        let mut columns = Vec::with_capacity(reserved);
+        columns.resize_with(reserved, || None);
+        Self {
+            columns,
+            reserved_count: reserved,
+        }
+    }
+
     pub fn find_column(&self, oid: &Oid) -> Option<usize> {
         self.columns
             .iter()
             .position(|slot| slot.as_ref() == Some(oid))
     }
 
-    pub fn allocate_column(&mut self, oid: Oid) -> usize {
-        if let Some(pos) = self.columns.iter().position(|s| s.is_none()) {
-            self.columns[pos] = Some(oid);
-            pos
+    pub fn allocate_column_nonreserved(&mut self, oid: Oid) -> usize {
+        if let Some(pos) = self.columns.iter().skip(self.reserved_count).position(|s| s.is_none()) {
+            let idx = pos + self.reserved_count;
+            self.columns[idx] = Some(oid);
+            idx
         } else {
             self.columns.push(Some(oid));
             self.columns.len() - 1
@@ -87,7 +97,7 @@ impl LayoutState {
     }
 
     pub fn collapse_trailing(&mut self) {
-        while self.columns.last() == Some(&None) {
+        while self.columns.len() > self.reserved_count && self.columns.last() == Some(&None) {
             self.columns.pop();
         }
     }

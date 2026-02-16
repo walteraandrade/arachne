@@ -12,6 +12,8 @@ pub async fn start_github_poller(
 
     loop {
         interval.tick().await;
-        let _ = tx.send(AppEvent::GitHubUpdate(pane_idx));
+        if tx.send(AppEvent::GitHubUpdate(pane_idx)).is_err() {
+            break;
+        }
     }
 }

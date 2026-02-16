@@ -1,3 +1,4 @@
+use crate::ui::input::FilterMode;
 use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,
@@ -12,8 +13,9 @@ pub struct StatusBar<'a> {
     pub branch_name: &'a str,
     pub last_sync: &'a str,
     pub rate_limit: Option<u32>,
-    pub filter_mode: bool,
+    pub filter_mode: FilterMode,
     pub filter_text: &'a str,
+    pub author_filter_text: &'a str,
 }
 
 impl<'a> Widget for StatusBar<'a> {
@@ -23,21 +25,26 @@ impl<'a> Widget for StatusBar<'a> {
             buf[(x, area.y)].set_style(bg);
         }
 
-        if self.filter_mode {
+        if self.filter_mode.is_active() {
+            let (prefix, text) = match self.filter_mode {
+                FilterMode::Branch => (" /", self.filter_text),
+                FilterMode::Author => (" a/", self.author_filter_text),
+                FilterMode::Off => unreachable!(),
+            };
             let line = Line::from(vec![
                 Span::styled(
-                    " /",
+                    prefix,
                     Style::default()
                         .fg(theme::FILTER_COLOR)
                         .bg(theme::STATUS_BG)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    self.filter_text.to_string(),
+                    text.to_string(),
                     Style::default().bg(theme::STATUS_BG),
                 ),
                 Span::styled(
-                    "▌",
+                    "\u{258c}",
                     Style::default()
                         .fg(theme::FILTER_COLOR)
                         .bg(theme::STATUS_BG),
@@ -49,7 +56,6 @@ impl<'a> Widget for StatusBar<'a> {
 
         let mut spans = Vec::new();
 
-        // Pane tabs
         spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
         for (name, is_active) in self.pane_tabs {
             let style = if *is_active {
@@ -68,7 +74,7 @@ impl<'a> Widget for StatusBar<'a> {
         }
 
         spans.push(Span::styled(
-            "│",
+            "\u{2502}",
             Style::default()
                 .fg(theme::BORDER_COLOR)
                 .bg(theme::STATUS_BG),
@@ -77,8 +83,24 @@ impl<'a> Widget for StatusBar<'a> {
             format!(" {} ", self.branch_name),
             Style::default().bg(theme::STATUS_BG),
         ));
+
+        if !self.author_filter_text.is_empty() {
+            spans.push(Span::styled(
+                "\u{2502}",
+                Style::default()
+                    .fg(theme::BORDER_COLOR)
+                    .bg(theme::STATUS_BG),
+            ));
+            spans.push(Span::styled(
+                format!(" author: {} ", self.author_filter_text),
+                Style::default()
+                    .fg(theme::FILTER_COLOR)
+                    .bg(theme::STATUS_BG),
+            ));
+        }
+
         spans.push(Span::styled(
-            "│",
+            "\u{2502}",
             Style::default()
                 .fg(theme::BORDER_COLOR)
                 .bg(theme::STATUS_BG),
@@ -90,7 +112,7 @@ impl<'a> Widget for StatusBar<'a> {
 
         if let Some(remaining) = self.rate_limit {
             spans.push(Span::styled(
-                "│",
+                "\u{2502}",
                 Style::default()
                     .fg(theme::BORDER_COLOR)
                     .bg(theme::STATUS_BG),

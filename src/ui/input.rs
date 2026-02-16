@@ -13,6 +13,7 @@ pub enum Action {
     Select,
     ToggleForks,
     Filter,
+    AuthorFilter,
     FilterChar(char),
     FilterBackspace,
     FilterConfirm,
@@ -23,12 +24,26 @@ pub enum Action {
     None,
 }
 
-pub fn map_key(key: KeyEvent, filter_mode: bool) -> Action {
-    if filter_mode {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterMode {
+    Off,
+    Branch,
+    Author,
+}
+
+impl FilterMode {
+    pub fn is_active(self) -> bool {
+        self != FilterMode::Off
+    }
+}
+
+pub fn map_key(key: KeyEvent, filter_mode: FilterMode) -> Action {
+    if filter_mode.is_active() {
         return match key.code {
             KeyCode::Esc => Action::FilterCancel,
             KeyCode::Enter => Action::FilterConfirm,
             KeyCode::Backspace => Action::FilterBackspace,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Quit,
             KeyCode::Char(c) => Action::FilterChar(c),
             _ => Action::None,
         };
@@ -48,6 +63,7 @@ pub fn map_key(key: KeyEvent, filter_mode: bool) -> Action {
         KeyCode::Enter => Action::Select,
         KeyCode::Char('f') => Action::ToggleForks,
         KeyCode::Char('/') => Action::Filter,
+        KeyCode::Char('a') => Action::AuthorFilter,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Esc => Action::ClosePopup,
         _ => Action::None,

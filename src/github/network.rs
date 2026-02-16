@@ -1,32 +1,37 @@
-use crate::error::Result;
-use crate::git::types::RepoData;
+use crate::git::types::{BranchInfo, CommitInfo};
 use crate::github::client::GitHubClient;
-use crate::graph::dag::Dag;
 
-pub async fn fetch_network(
+pub async fn fetch_network_detached(
     client: &GitHubClient,
-    dag: &mut Dag,
-    repo_data: &mut RepoData,
-) -> Result<Option<u32>> {
-    let forks = client.fetch_forks().await?;
-    let mut all_remote_commits = Vec::new();
+) -> std::result::Result<(Vec<BranchInfo>, Vec<CommitInfo>, Option<u32>), String> {
+    let forks = client.fetch_forks().await.map_err(|e| e.to_string())?;
+    let mut all_branches = Vec::new();
+    let mut all_commits = Vec::new();
 
     for fork in &forks {
-        let branches = client.fetch_fork_branches(fork).await?;
+        let branches = match client.fetch_fork_branches(fork).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("warning: fetching branches for {}/{}: {e}", fork.owner, fork.repo);
+                continue;
+            }
+        };
 
         for branch in &branches {
-            let commits = client
+            match client
                 .fetch_commits(&fork.owner, &fork.repo, &branch.tip.to_string(), 100)
                 .await
-                .unwrap_or_default();
-            all_remote_commits.extend(commits);
+            {
+                Ok(commits) => all_commits.extend(commits),
+                Err(e) => {
+                    eprintln!("warning: fetching commits for {}/{} {}: {e}", fork.owner, fork.repo, branch.name);
+                }
+            }
         }
 
-        repo_data.branches.extend(branches);
+        all_branches.extend(branches);
     }
 
-    dag.merge_remote(all_remote_commits);
-
     let rate = client.rate_limit().await;
-    Ok(rate)
+    Ok((all_branches, all_commits, rate))
 }

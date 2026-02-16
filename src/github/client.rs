@@ -1,9 +1,10 @@
 use crate::error::{ArachneError, Result};
 use crate::git::types::{BranchInfo, CommitInfo, CommitSource, Oid};
-use crate::github::types::*;
+use crate::github::types::ForkInfo;
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 
+#[derive(Clone)]
 pub struct GitHubClient {
     octo: Octocrab,
     owner: String,
@@ -73,24 +74,37 @@ impl GitHubClient {
 
     pub async fn fetch_fork_branches(&self, fork: &ForkInfo) -> Result<Vec<BranchInfo>> {
         let mut branches = Vec::new();
+        let mut page = 1u32;
 
-        let result = self
-            .octo
-            .repos(&fork.owner, &fork.repo)
-            .list_branches()
-            .per_page(100)
-            .send()
-            .await
-            .map_err(|e| ArachneError::GitHub(e.to_string()))?;
+        loop {
+            let result = self
+                .octo
+                .repos(&fork.owner, &fork.repo)
+                .list_branches()
+                .per_page(100)
+                .page(page)
+                .send()
+                .await
+                .map_err(|e| ArachneError::GitHub(e.to_string()))?;
 
-        for branch in &result.items {
-            let sha_bytes = sha_str_to_bytes(&branch.commit.sha);
-            branches.push(BranchInfo {
-                name: branch.name.clone(),
-                tip: Oid(sha_bytes),
-                is_head: false,
-                source: CommitSource::Fork(fork.owner.clone()),
-            });
+            if result.items.is_empty() {
+                break;
+            }
+
+            for branch in &result.items {
+                let sha_bytes = sha_str_to_bytes(&branch.commit.sha)?;
+                branches.push(BranchInfo {
+                    name: branch.name.clone(),
+                    tip: Oid::from_bytes(sha_bytes),
+                    is_head: false,
+                    source: CommitSource::Fork(fork.owner.clone()),
+                });
+            }
+
+            if result.next.is_none() {
+                break;
+            }
+            page += 1;
         }
 
         Ok(branches)
@@ -123,12 +137,12 @@ impl GitHubClient {
             }
 
             for c in &result.items {
-                let oid = Oid(sha_str_to_bytes(&c.sha));
+                let oid = Oid::from_bytes(sha_str_to_bytes(&c.sha)?);
                 let parents: Vec<Oid> = c
                     .parents
                     .iter()
                     .filter_map(|p| p.sha.as_deref())
-                    .map(|sha| Oid(sha_str_to_bytes(sha)))
+                    .filter_map(|sha| sha_str_to_bytes(sha).ok().map(Oid::from_bytes))
                     .collect();
 
                 let message = c.commit.message.lines().next().unwrap_or("").to_string();
@@ -177,14 +191,19 @@ impl GitHubClient {
     }
 }
 
-fn sha_str_to_bytes(sha: &str) -> [u8; 20] {
+fn sha_str_to_bytes(sha: &str) -> Result<[u8; 20]> {
+    if sha.len() != 40 {
+        return Err(ArachneError::GitHub(format!(
+            "invalid SHA length {}: expected 40",
+            sha.len()
+        )));
+    }
     let mut bytes = [0u8; 20];
     for (i, chunk) in sha.as_bytes().chunks(2).take(20).enumerate() {
-        if let Ok(s) = std::str::from_utf8(chunk) {
-            if let Ok(b) = u8::from_str_radix(s, 16) {
-                bytes[i] = b;
-            }
-        }
+        let s = std::str::from_utf8(chunk)
+            .map_err(|e| ArachneError::GitHub(format!("invalid SHA UTF-8: {e}")))?;
+        bytes[i] = u8::from_str_radix(s, 16)
+            .map_err(|e| ArachneError::GitHub(format!("invalid SHA hex: {e}")))?;
     }
-    bytes
+    Ok(bytes)
 }

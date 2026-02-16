@@ -8,9 +8,6 @@ pub enum ArachneError {
     #[error("github error: {0}")]
     GitHub(String),
 
-    #[error("config error: {0}")]
-    Config(String),
-
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -19,9 +16,6 @@ pub enum ArachneError {
 
     #[error("not a git repository: {0}")]
     NotARepo(String),
-
-    #[error("rate limited — resets at {0}")]
-    RateLimited(String),
 }
 
 pub type Result<T> = std::result::Result<T, ArachneError>;

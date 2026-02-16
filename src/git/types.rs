@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Oid(pub [u8; 20]);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Oid([u8; 20]);
 
 impl Oid {
     pub fn from_git2(oid: git2::Oid) -> Self {
@@ -12,8 +13,18 @@ impl Oid {
         Self(bytes)
     }
 
-    pub fn short(&self) -> String {
-        self.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+    pub fn zero() -> Self {
+        Self([0u8; 20])
+    }
+
+    pub fn from_bytes(bytes: [u8; 20]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Hash for Oid {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(u64::from_le_bytes(self.0[..8].try_into().unwrap()));
     }
 }
 
@@ -29,6 +40,7 @@ impl fmt::Display for Oid {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommitSource {
     Local,
+    Remote(String),
     Fork(String),
 }
 

@@ -1,3 +1,4 @@
+use crate::graph::layout::format_time_ago;
 use crate::graph::types::GraphRow;
 use crate::ui::theme;
 use ratatui::{
@@ -42,13 +43,14 @@ impl<'a> Widget for DetailPanel<'a> {
 
         let author_line = Line::from(vec![
             Span::styled("Author: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(self.row.author.clone()),
+            Span::raw(self.row.author.as_str()),
         ]);
         buf.set_line(chunks[1].x, chunks[1].y, &author_line, chunks[1].width);
 
+        let time_ago = format_time_ago(&self.row.time);
         let time_line = Line::from(vec![
             Span::styled("Time: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(self.row.time_ago.clone()),
+            Span::raw(time_ago),
         ]);
         buf.set_line(chunks[2].x, chunks[2].y, &time_line, chunks[2].width);
 
@@ -71,7 +73,7 @@ impl<'a> Widget for DetailPanel<'a> {
             buf.set_line(chunks[4].x, chunks[4].y, &tag_line, chunks[4].width);
         }
 
-        let msg = Paragraph::new(self.row.message.clone()).wrap(Wrap { trim: true });
+        let msg = Paragraph::new(self.row.message.as_str()).wrap(Wrap { trim: true });
         msg.render(chunks[5], buf);
     }
 }
@@ -80,14 +82,14 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vert = Layout::vertical([
         Constraint::Percentage((100 - percent_y) / 2),
         Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Min(0),
     ])
     .split(area);
 
     Layout::horizontal([
         Constraint::Percentage((100 - percent_x) / 2),
         Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Min(0),
     ])
     .split(vert[1])[1]
 }

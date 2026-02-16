@@ -1,15 +1,14 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::event::AppEvent;
+use crate::event::{AppEvent, GitHubData};
 use crate::git::{repo, types::RepoData};
 use crate::github::client::GitHubClient;
-use crate::github::network;
 use crate::graph::{dag::Dag, layout, types::GraphRow};
 use crate::ui::{
-    branch_panel::BranchPanel,
+    branch_panel::{self, BranchPanel, DisplayEntry, SectionKey},
     detail_panel::DetailPanel,
     graph_view::GraphView,
-    input::{self, Action},
+    input::{self, Action, FilterMode},
     status_bar::StatusBar,
 };
 use git2::Repository;
@@ -51,8 +50,10 @@ pub struct App {
 
     pub show_detail: bool,
     pub show_forks: bool,
-    pub filter_mode: bool,
+    pub filter_mode: FilterMode,
     pub filter_text: String,
+    pub author_filter_text: String,
+    pub collapsed_sections: HashSet<SectionKey>,
 
     pub should_quit: bool,
 }
@@ -70,8 +71,10 @@ impl App {
             branch_selected: 0,
             show_detail: false,
             show_forks: true,
-            filter_mode: false,
+            filter_mode: FilterMode::Off,
             filter_text: String::new(),
+            author_filter_text: String::new(),
+            collapsed_sections: HashSet::new(),
             should_quit: false,
         }
     }
@@ -96,7 +99,7 @@ impl App {
                 .unwrap_or_else(|| detect_repo_name(&r));
 
             let dag = Dag::from_repo_data(&repo_data);
-            let rows = layout::compute_layout(&dag, &repo_data);
+            let rows = layout::compute_layout(&dag, &repo_data, &self.config.trunk_branches);
 
             let github_client = init_github_client(&self.config, &repo_name);
 
@@ -113,42 +116,46 @@ impl App {
                 rate_limit: None,
             });
         }
+        self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.panes, "");
         Ok(())
     }
 
     pub fn rebuild_graph(&mut self, pane_idx: usize) {
         if let Some(pane) = self.panes.get_mut(pane_idx) {
             if let Some(ref r) = pane.repo {
-                if let Ok(data) = repo::read_repo(r) {
-                    pane.repo_data = data;
-                    pane.dag = Dag::from_repo_data(&pane.repo_data);
-                    pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data);
-                    pane.last_sync = "just now".to_string();
-                    pane.current_branch = pane
-                        .repo_data
+                if let Ok(mut data) = repo::read_repo(r) {
+                    pane.current_branch = data
                         .branches
                         .iter()
                         .find(|b| b.is_head)
                         .map(|b| b.name.clone())
                         .unwrap_or_else(|| "detached".to_string());
+
+                    if !self.author_filter_text.is_empty() {
+                        filter_by_author(&mut data, &self.author_filter_text);
+                    }
+
+                    pane.repo_data = data;
+                    pane.dag = Dag::from_repo_data(&pane.repo_data);
+                    pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data, &self.config.trunk_branches);
+                    pane.last_sync = "just now".to_string();
                 }
             }
         }
     }
 
-    pub async fn fetch_github(&mut self, pane_idx: usize) {
+    pub fn handle_github_result(&mut self, pane_idx: usize, result: std::result::Result<GitHubData, String>) {
         if let Some(pane) = self.panes.get_mut(pane_idx) {
-            if let Some(ref client) = pane.github_client {
-                let result =
-                    network::fetch_network(client, &mut pane.dag, &mut pane.repo_data).await;
-                match result {
-                    Ok(rate) => {
-                        pane.rate_limit = rate;
-                        pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data);
-                    }
-                    Err(e) => {
-                        pane.last_sync = format!("error: {e}");
-                    }
+            match result {
+                Ok(data) => {
+                    pane.rate_limit = data.rate_limit;
+                    pane.repo_data.branches.extend(data.branches);
+                    pane.dag.merge_remote(data.commits);
+                    pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data, &self.config.trunk_branches);
+                    pane.last_sync = "just now".to_string();
+                }
+                Err(e) => {
+                    pane.last_sync = format!("error: {e}");
                 }
             }
         }
@@ -162,13 +169,10 @@ impl App {
             }
             AppEvent::FsChanged(idx) => self.rebuild_graph(idx),
             AppEvent::GitHubUpdate(_) => {}
-            AppEvent::Resize(_, _) => {}
-            AppEvent::Tick => {}
-            AppEvent::Error(msg) => {
-                if let Some(pane) = self.panes.get_mut(self.active_pane) {
-                    pane.last_sync = format!("error: {msg}");
-                }
+            AppEvent::GitHubResult { pane_idx, result } => {
+                self.handle_github_result(pane_idx, result);
             }
+            AppEvent::Resize => {}
         }
     }
 
@@ -184,7 +188,17 @@ impl App {
                         }
                     }
                 }
-                Panel::Branches => self.branch_selected += 1,
+                Panel::Branches => {
+                    let entries = branch_panel::build_entries(
+                        &self.panes,
+                        &self.filter_text,
+                        self.show_forks,
+                        &self.collapsed_sections,
+                    );
+                    if !entries.is_empty() {
+                        self.branch_selected = (self.branch_selected + 1).min(entries.len() - 1);
+                    }
+                }
             },
             Action::ScrollUp => match self.active_panel {
                 Panel::Graph => {
@@ -204,7 +218,7 @@ impl App {
             }
             Action::ScrollRight => {
                 if let Some(pane) = self.panes.get_mut(self.active_pane) {
-                    pane.scroll_x += 4;
+                    pane.scroll_x = pane.scroll_x.saturating_add(4);
                 }
             }
             Action::PanelLeft => self.active_panel = Panel::Branches,
@@ -226,19 +240,50 @@ impl App {
                 }
             }
             Action::Select => {
-                self.show_detail = !self.show_detail;
+                if self.active_panel == Panel::Branches {
+                    self.toggle_branch_section();
+                } else {
+                    self.show_detail = !self.show_detail;
+                }
             }
             Action::ToggleForks => self.show_forks = !self.show_forks,
-            Action::Filter => self.filter_mode = true,
-            Action::FilterChar(c) => self.filter_text.push(c),
-            Action::FilterBackspace => {
-                self.filter_text.pop();
-            }
-            Action::FilterConfirm | Action::FilterCancel => {
-                self.filter_mode = false;
-                if matches!(action, Action::FilterCancel) {
-                    self.filter_text.clear();
+            Action::Filter => self.filter_mode = FilterMode::Branch,
+            Action::AuthorFilter => self.filter_mode = FilterMode::Author,
+            Action::FilterChar(c) => match self.filter_mode {
+                FilterMode::Branch => self.filter_text.push(c),
+                FilterMode::Author => self.author_filter_text.push(c),
+                FilterMode::Off => {}
+            },
+            Action::FilterBackspace => match self.filter_mode {
+                FilterMode::Branch => { self.filter_text.pop(); }
+                FilterMode::Author => { self.author_filter_text.pop(); }
+                FilterMode::Off => {}
+            },
+            Action::FilterConfirm => {
+                let was_author = self.filter_mode == FilterMode::Author;
+                self.filter_mode = FilterMode::Off;
+                if was_author {
+                    for idx in 0..self.panes.len() {
+                        self.rebuild_graph(idx);
+                    }
+                    self.clamp_selected();
                 }
+            }
+            Action::FilterCancel => {
+                match self.filter_mode {
+                    FilterMode::Branch => self.filter_text.clear(),
+                    FilterMode::Author => {
+                        self.author_filter_text.clear();
+                        self.filter_mode = FilterMode::Off;
+                        for idx in 0..self.panes.len() {
+                            self.rebuild_graph(idx);
+                        }
+                        self.clamp_selected();
+                        return;
+                    }
+                    FilterMode::Off => {}
+                }
+                self.filter_mode = FilterMode::Off;
             }
             Action::Refresh => {
                 for idx in 0..self.panes.len() {
@@ -254,6 +299,24 @@ impl App {
         if let Some(pane) = self.panes.get(self.active_pane) {
             if !pane.rows.is_empty() && self.graph_selected >= pane.rows.len() {
                 self.graph_selected = pane.rows.len() - 1;
+            }
+        }
+    }
+
+    fn toggle_branch_section(&mut self) {
+        let entries = branch_panel::build_entries(
+            &self.panes,
+            &self.filter_text,
+            self.show_forks,
+            &self.collapsed_sections,
+        );
+        if let Some(entry) = entries.get(self.branch_selected) {
+            if let Some(key) = entry.section_key() {
+                if self.collapsed_sections.contains(key) {
+                    self.collapsed_sections.remove(key);
+                } else {
+                    self.collapsed_sections.insert(key.clone());
+                }
             }
         }
     }
@@ -294,9 +357,19 @@ impl App {
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(size);
 
+        let entries = branch_panel::build_entries(
+            &self.panes,
+            &self.filter_text,
+            self.show_forks,
+            &self.collapsed_sections,
+        );
+        let max_w = branch_panel::max_entry_width(&entries);
+        let term_w = size.width as usize;
+        let panel_w = (max_w + 2).clamp(20, term_w / 3) as u16;
+
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(25), Constraint::Min(1)])
+            .constraints([Constraint::Length(panel_w), Constraint::Min(1)])
             .split(main_chunks[0]);
 
         let graph_area = body_chunks[1];
@@ -304,22 +377,25 @@ impl App {
 
         self.ensure_scroll_bounds(visible_height);
 
-        let highlighted: HashSet<_> = self.get_highlighted_oids();
+        let highlighted: HashSet<_> = self.get_highlighted_oids(&entries);
 
         let branch_panel = BranchPanel {
-            panes: &self.panes,
+            entries: &entries,
             selected: self.branch_selected,
             scroll: self.branch_scroll,
-            filter: &self.filter_text,
             focused: self.active_panel == Panel::Branches,
-            show_forks: self.show_forks,
         };
         frame.render_widget(branch_panel, body_chunks[0]);
 
-        // Split graph area into N panes
-        let pane_count = self.panes.len().max(1);
-        let constraints: Vec<Constraint> = (0..pane_count)
-            .map(|_| Constraint::Ratio(1, pane_count as u32))
+        let weights: Vec<u32> = self
+            .panes
+            .iter()
+            .map(|p| ((p.rows.len() as f64).sqrt().ceil() as u32).max(1))
+            .collect();
+        let total: u32 = weights.iter().sum::<u32>().max(1);
+        let constraints: Vec<Constraint> = weights
+            .iter()
+            .map(|&w| Constraint::Ratio(w, total))
             .collect();
         let pane_chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -350,11 +426,12 @@ impl App {
                 highlighted_oids: &highlighted,
                 repo_name: &pane.repo_name,
                 is_active,
+                is_first_pane: idx == 0,
+                trunk_count: self.config.trunk_branches.len(),
             };
             frame.render_widget(graph_view, pane_chunks[idx]);
         }
 
-        // Status bar — show pane tabs
         let pane_names: Vec<(&str, bool)> = self
             .panes
             .iter()
@@ -370,6 +447,7 @@ impl App {
             rate_limit: active.and_then(|p| p.rate_limit),
             filter_mode: self.filter_mode,
             filter_text: &self.filter_text,
+            author_filter_text: &self.author_filter_text,
         };
         frame.render_widget(status, main_chunks[1]);
 
@@ -395,13 +473,12 @@ impl App {
         }
     }
 
-    fn get_highlighted_oids(&self) -> HashSet<crate::git::types::Oid> {
+    fn get_highlighted_oids(&self, entries: &[DisplayEntry]) -> HashSet<crate::git::types::Oid> {
         let mut set = HashSet::new();
         if self.active_panel == Panel::Branches {
-            // Highlight from active pane's branches
-            if let Some(pane) = self.panes.get(self.active_pane) {
-                if let Some(branch) = pane.repo_data.branches.get(self.branch_selected) {
-                    set.insert(branch.tip.clone());
+            if let Some(entry) = entries.get(self.branch_selected) {
+                if let Some(tip) = entry.tip_oid() {
+                    set.insert(tip);
                 }
             }
         }
@@ -416,7 +493,6 @@ fn find_closest_by_time(
     if rows.is_empty() {
         return 0;
     }
-    // Rows are in topo order (newest first). Binary search by time.
     let mut best = 0;
     let mut best_diff = i64::MAX;
     for (i, row) in rows.iter().enumerate() {
@@ -444,12 +520,56 @@ fn init_github_client(config: &Config, repo_name: &str) -> Option<GitHubClient> 
 
 fn expand_tilde(path: &std::path::Path) -> std::path::PathBuf {
     let s = path.to_string_lossy();
-    if s.starts_with("~/") {
+    if let Some(rest) = s.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(&s[2..]);
+            return std::path::PathBuf::from(home).join(rest);
         }
     }
     path.to_path_buf()
+}
+
+fn filter_by_author(data: &mut RepoData, author_query: &str) {
+    use std::collections::HashMap;
+
+    let query = author_query.to_lowercase();
+    let commit_map: HashMap<_, _> = data.commits.iter().map(|c| (c.oid, c)).collect();
+
+    let matching_branches: Vec<_> = data
+        .branches
+        .iter()
+        .filter(|branch| {
+            let mut current = Some(&branch.tip);
+            while let Some(oid) = current {
+                if let Some(commit) = commit_map.get(oid) {
+                    if commit.author.to_lowercase().contains(&query) {
+                        return true;
+                    }
+                    current = commit.parents.first();
+                } else {
+                    break;
+                }
+            }
+            false
+        })
+        .cloned()
+        .collect();
+
+    let mut reachable: HashSet<crate::git::types::Oid> = HashSet::new();
+    for branch in &matching_branches {
+        let mut stack = vec![branch.tip];
+        while let Some(oid) = stack.pop() {
+            if !reachable.insert(oid) {
+                continue;
+            }
+            if let Some(commit) = commit_map.get(&oid) {
+                stack.extend(commit.parents.iter().copied());
+            }
+        }
+    }
+
+    data.branches = matching_branches;
+    data.commits.retain(|c| reachable.contains(&c.oid));
+    data.branch_tips = data.branches.iter().map(|b| b.tip).collect();
 }
 
 fn detect_repo_name(repo: &Repository) -> String {
