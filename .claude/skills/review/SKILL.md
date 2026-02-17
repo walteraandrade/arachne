@@ -17,13 +17,14 @@ Determine what to review:
 
 ## Step 1: Parallel Review Agents
 
-Launch these 3 subagents **in parallel**:
+Launch these 4 subagents **in parallel**:
 
 1. **consistency-reviewer** — duplicated logic, pattern divergence, missed utility reuse
 2. **solid-reviewer** — SOLID violations, clean code, structural issues
 3. **defensive-reviewer** — unsafe unwraps, swallowed Results, panic paths
+4. **security-reviewer** — terminal injection, path traversal, resource exhaustion, unsafe code, dependency vulns
 
-Each reviewer gets the current diff context. Wait for all 3 to complete.
+Each reviewer gets the current diff context. Wait for all 4 to complete.
 
 ## Step 2: Automated Checks
 
@@ -31,6 +32,7 @@ Run in parallel:
 - `cargo test` — full test suite
 - `cargo clippy -- -D warnings 2>&1` — lint check
 - `cargo fmt --check 2>&1` — format check
+- `cargo audit 2>&1` — dependency vulnerability check (skip if not installed)
 
 Capture all output.
 
@@ -47,9 +49,11 @@ Merge all reviewer findings. For each finding:
    - Does it change a type used across module boundaries? → MEDIUM risk
 
 When reviewers conflict:
-- Defensive "must fix" items always win
+- Security "must fix" items always win over all others
+- Defensive "must fix" items win over consistency/solid
 - Prefer DRY (consistency) over structural purity (solid)
 - If a consistency fix and a solid fix touch the same code, merge into one refactoring step
+- Security fixes that require API changes should be batched early — they often unblock defensive fixes
 
 ## Step 4: Build Fix Plan
 
@@ -98,12 +102,13 @@ Write a markdown report to `.reviews/YYYY-MM-DD-HHmm.md`:
 
 **Date**: YYYY-MM-DD HH:mm
 **Scope**: [what was reviewed]
-**Reviewers**: consistency, solid, defensive
+**Reviewers**: consistency, solid, defensive, security
 
 ## Automated Check Results
 - cargo test: PASS/FAIL (N tests)
 - cargo clippy: PASS/FAIL (N warnings)
 - cargo fmt: PASS/FAIL
+- cargo audit: PASS/FAIL (N vulnerabilities) or SKIPPED
 
 ## Fix Plan
 
