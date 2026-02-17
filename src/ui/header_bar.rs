@@ -52,15 +52,11 @@ impl<'a> Widget for HeaderBar<'a> {
                 ));
                 spans.push(Span::styled(
                     format!(" ({}) ", p.branch),
-                    Style::default()
-                        .fg(theme::ACCENT)
-                        .bg(theme::HEADER_BG),
+                    Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
                 ));
                 spans.push(Span::styled(
                     format!("{} commits", p.commit_count),
-                    Style::default()
-                        .fg(theme::DIM_TEXT)
-                        .bg(theme::HEADER_BG),
+                    Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
                 ));
             }
         } else {
@@ -75,16 +71,12 @@ impl<'a> Widget for HeaderBar<'a> {
                     ));
                     spans.push(Span::styled(
                         format!(" ({}) {}  ", p.branch, p.commit_count),
-                        Style::default()
-                            .fg(theme::ACCENT)
-                            .bg(theme::HEADER_BG),
+                        Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
                     ));
                 } else {
                     spans.push(Span::styled(
                         format!("[{}] ", p.name),
-                        Style::default()
-                            .fg(theme::DIM_TEXT)
-                            .bg(theme::HEADER_BG),
+                        Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
                     ));
                 }
             }
@@ -102,7 +94,11 @@ impl<'a> Widget for HeaderBar<'a> {
         if !self.author_filter.is_empty() {
             let filter_text = format!("author: {}", self.author_filter);
             let filter_w = UnicodeWidthStr::width(filter_text.as_str());
-            let left_used: usize = left_line.spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+            let left_used: usize = left_line
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
             let center_x = (area_w.saturating_sub(filter_w) / 2).max(left_used);
             if center_x + filter_w < area_w.saturating_sub(right_w) {
                 let filter_span = Span::styled(
@@ -111,7 +107,12 @@ impl<'a> Widget for HeaderBar<'a> {
                         .fg(theme::FILTER_COLOR)
                         .bg(theme::HEADER_BG),
                 );
-                buf.set_line(area.x + center_x as u16, area.y, &Line::from(filter_span), filter_w as u16);
+                buf.set_line(
+                    area.x + center_x as u16,
+                    area.y,
+                    &Line::from(filter_span),
+                    filter_w as u16,
+                );
             }
         }
 

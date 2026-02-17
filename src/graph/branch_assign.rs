@@ -76,6 +76,6 @@ fn find_branch_tip(repo_data: &RepoData, trunk_name: &str) -> Option<Oid> {
         .map(|b| b.tip)
 }
 
-fn strip_remote_prefix(name: &str) -> &str {
+pub fn strip_remote_prefix(name: &str) -> &str {
     name.find('/').map(|i| &name[i + 1..]).unwrap_or(name)
 }

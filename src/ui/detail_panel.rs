@@ -15,7 +15,7 @@ pub struct DetailPanel<'a> {
 
 impl<'a> Widget for DetailPanel<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        let popup = centered_rect(70, 50, area);
+        let popup = super::centered_rect(70, 50, area);
         Clear.render(popup, buf);
 
         let block = Block::default()
@@ -79,20 +79,4 @@ impl<'a> Widget for DetailPanel<'a> {
         let msg = Paragraph::new(self.row.message.as_str()).wrap(Wrap { trim: true });
         msg.render(chunks[5], buf);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vert = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Min(0),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Min(0),
-    ])
-    .split(vert[1])[1]
 }

@@ -21,10 +21,10 @@ use crossterm::{
 use event::{AppEvent, GitHubData};
 use futures::StreamExt;
 use std::collections::HashSet;
-use watcher::fs::FsWatcherHandle;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use watcher::fs::FsWatcherHandle;
 
 #[derive(Parser)]
 #[command(name = "arachne", about = "TUI git network graph viewer")]
@@ -69,8 +69,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(ref r) = pane.repo {
             if let Some(workdir) = r.workdir() {
                 let repo_path = workdir.to_path_buf();
-                if let Ok(w) = watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
-                    watchers.push(w);
+                match watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
+                    Ok(w) => watchers.push(w),
+                    Err(e) => eprintln!("warn: fs watcher failed for {}: {e}", repo_path.display()),
                 }
             }
         }
@@ -85,7 +86,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
 
     let input_tx = tx.clone();
-    tokio::spawn(async move {
+    let input_handle = tokio::spawn(async move {
         let mut reader = EventStream::new();
         while let Some(Ok(event)) = reader.next().await {
             let app_event = match event {
@@ -123,6 +124,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    input_handle.abort();
     for w in &watchers {
         w.debounce_task.abort();
     }
@@ -155,18 +157,18 @@ fn process_event(
                     tokio::spawn(async move {
                         let result = github::network::fetch_network_detached(&client).await;
                         let event = match result {
-                            Ok((branches, commits, rate_limit)) => {
-                                AppEvent::GitHubResult {
-                                    pane_idx: idx,
-                                    result: Ok(GitHubData { rate_limit, branches, commits }),
-                                }
-                            }
-                            Err(e) => {
-                                AppEvent::GitHubResult {
-                                    pane_idx: idx,
-                                    result: Err(e),
-                                }
-                            }
+                            Ok((branches, commits, rate_limit)) => AppEvent::GitHubResult {
+                                pane_idx: idx,
+                                result: Ok(GitHubData {
+                                    rate_limit,
+                                    branches,
+                                    commits,
+                                }),
+                            },
+                            Err(e) => AppEvent::GitHubResult {
+                                pane_idx: idx,
+                                result: Err(e),
+                            },
                         };
                         let _ = tx.send(event);
                     });

@@ -86,7 +86,12 @@ impl LayoutState {
     }
 
     pub fn allocate_column_nonreserved(&mut self, oid: Oid) -> usize {
-        if let Some(pos) = self.columns.iter().skip(self.reserved_count).position(|s| s.is_none()) {
+        if let Some(pos) = self
+            .columns
+            .iter()
+            .skip(self.reserved_count)
+            .position(|s| s.is_none())
+        {
             let idx = pos + self.reserved_count;
             self.columns[idx] = Some(oid);
             idx

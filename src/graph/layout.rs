@@ -33,8 +33,7 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
         let is_trunk = branch_idx.is_some_and(|bi| bi < trunk_branches.len());
 
         let col = state.find_column(oid).unwrap_or_else(|| {
-            if is_trunk {
-                let lane = branch_idx.unwrap();
+            if let Some(lane) = branch_idx.filter(|_| is_trunk) {
                 state.columns[lane] = Some(*oid);
                 lane
             } else {
@@ -72,8 +71,7 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
 
             if let Some(existing_col) = state.find_column(first_parent) {
                 add_merge_cells(&mut cells, col, existing_col, color);
-            } else if parent_is_trunk {
-                let lane = parent_branch.unwrap();
+            } else if let Some(lane) = parent_branch.filter(|_| parent_is_trunk) {
                 if state.columns[lane].is_none() {
                     state.columns[lane] = Some(*first_parent);
                     if lane != col {
@@ -94,8 +92,7 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
                     let p_branch = commit_branches.get(parent).copied();
                     let p_is_trunk = p_branch.is_some_and(|bi| bi < trunk_branches.len());
 
-                    let new_col = if p_is_trunk {
-                        let lane = p_branch.unwrap();
+                    let new_col = if let Some(lane) = p_branch.filter(|_| p_is_trunk) {
                         if state.columns[lane].is_none() {
                             state.columns[lane] = Some(*parent);
                             lane
@@ -213,45 +210,31 @@ fn build_tag_map(tags: &[TagInfo]) -> HashMap<Oid, Vec<String>> {
     map
 }
 
-pub fn format_time_ago(time: &chrono::DateTime<chrono::Utc>) -> String {
-    let now = chrono::Utc::now();
-    let dur = now.signed_duration_since(*time);
-
+fn duration_bucket(time: &chrono::DateTime<chrono::Utc>) -> (i64, &'static str) {
+    let dur = chrono::Utc::now().signed_duration_since(*time);
     if dur.num_seconds() < 60 {
-        return format!("{}s ago", dur.num_seconds());
+        (dur.num_seconds(), "s")
+    } else if dur.num_minutes() < 60 {
+        (dur.num_minutes(), "m")
+    } else if dur.num_hours() < 24 {
+        (dur.num_hours(), "h")
+    } else if dur.num_days() < 30 {
+        (dur.num_days(), "d")
+    } else if dur.num_days() < 365 {
+        (dur.num_days() / 30, "mo")
+    } else {
+        (dur.num_days() / 365, "y")
     }
-    if dur.num_minutes() < 60 {
-        return format!("{}m ago", dur.num_minutes());
-    }
-    if dur.num_hours() < 24 {
-        return format!("{}h ago", dur.num_hours());
-    }
-    if dur.num_days() < 30 {
-        return format!("{}d ago", dur.num_days());
-    }
-    if dur.num_days() < 365 {
-        return format!("{}mo ago", dur.num_days() / 30);
-    }
-    format!("{}y ago", dur.num_days() / 365)
+}
+
+pub fn format_time_ago(time: &chrono::DateTime<chrono::Utc>) -> String {
+    let (val, unit) = duration_bucket(time);
+    format!("{val}{unit} ago")
 }
 
 pub fn format_time_short(time: &chrono::DateTime<chrono::Utc>) -> String {
-    let now = chrono::Utc::now();
-    let dur = now.signed_duration_since(*time);
-
-    if dur.num_seconds() < 60 {
-        format!("{}s", dur.num_seconds())
-    } else if dur.num_minutes() < 60 {
-        format!("{}m", dur.num_minutes())
-    } else if dur.num_hours() < 24 {
-        format!("{}h", dur.num_hours())
-    } else if dur.num_days() < 30 {
-        format!("{}d", dur.num_days())
-    } else if dur.num_days() < 365 {
-        format!("{}mo", dur.num_days() / 30)
-    } else {
-        format!("{}y", dur.num_days() / 365)
-    }
+    let (val, unit) = duration_bucket(time);
+    format!("{val}{unit}")
 }
 
 #[cfg(test)]
@@ -362,10 +345,7 @@ mod tests {
 
     #[test]
     fn trunk_lane_reservation() {
-        let commits = vec![
-            make_commit(1, vec![2], 10),
-            make_commit(2, vec![], 20),
-        ];
+        let commits = vec![make_commit(1, vec![2], 10), make_commit(2, vec![], 20)];
         let data = make_repo_data(
             commits,
             vec![BranchInfo {
@@ -415,8 +395,15 @@ mod tests {
 
         // feature branch commit should not be in reserved lane 0
         let feat_row = rows.iter().find(|r| r.oid == make_oid(2)).unwrap();
-        let commit_col = feat_row.cells.iter().position(|c| c.symbol == CellSymbol::Commit).unwrap();
-        assert!(commit_col >= 1, "feature should be in lane >= reserved_count");
+        let commit_col = feat_row
+            .cells
+            .iter()
+            .position(|c| c.symbol == CellSymbol::Commit)
+            .unwrap();
+        assert!(
+            commit_col >= 1,
+            "feature should be in lane >= reserved_count"
+        );
     }
 
     #[test]
@@ -435,7 +422,10 @@ mod tests {
         let has_merge_sym = merge_row.cells.iter().any(|c| {
             matches!(
                 c.symbol,
-                CellSymbol::MergeDown | CellSymbol::MergeUp | CellSymbol::BranchRight | CellSymbol::BranchLeft
+                CellSymbol::MergeDown
+                    | CellSymbol::MergeUp
+                    | CellSymbol::BranchRight
+                    | CellSymbol::BranchLeft
             )
         });
         assert!(has_merge_sym, "merge commit should have merge/branch cells");

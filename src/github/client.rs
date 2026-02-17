@@ -51,16 +51,7 @@ impl GitHubClient {
                     .map(|o| o.login.clone())
                     .unwrap_or_default();
                 let name = fork.name.clone();
-                let default = fork
-                    .default_branch
-                    .clone()
-                    .unwrap_or_else(|| "main".to_string());
-
-                forks.push(ForkInfo {
-                    owner,
-                    repo: name,
-                    default_branch: default,
-                });
+                forks.push(ForkInfo { owner, repo: name });
             }
 
             if result.next.is_none() {

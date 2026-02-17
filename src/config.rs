@@ -29,7 +29,10 @@ impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
             .field("repo_path", &self.repo_path)
-            .field("github_token", &self.github_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "github_token",
+                &self.github_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("poll_interval_secs", &self.poll_interval_secs)
             .field("show_forks", &self.show_forks)
             .field("max_commits", &self.max_commits)

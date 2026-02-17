@@ -23,20 +23,18 @@ pub const FILTER_COLOR: Color = Color::Cyan;
 pub const DIM_TEXT: Color = Color::Rgb(100, 100, 120);
 pub const ACTIVE_BORDER: Color = Color::Rgb(120, 120, 180);
 
-pub const TRUNK_COLORS: &[Color] = &[
-    Color::LightCyan,
-    Color::LightYellow,
-    Color::LightGreen,
-];
+pub const TRUNK_COLORS: &[Color] = &[Color::LightCyan, Color::LightYellow, Color::LightGreen];
 
 pub const SECTION_SEPARATOR: Color = Color::Rgb(60, 60, 80);
 pub const DIM_PREFIX: Color = Color::Rgb(90, 90, 110);
 pub const ERROR_FG: Color = Color::LightRed;
+pub const SECTION_HEADER_FG: Color = Color::White;
 
 pub fn branch_prefix_color(name: &str) -> Color {
     if name.starts_with("feat/") || name.starts_with("feature/") {
         Color::Cyan
-    } else if name.starts_with("fix/") || name.starts_with("bugfix/") || name.starts_with("hotfix/") {
+    } else if name.starts_with("fix/") || name.starts_with("bugfix/") || name.starts_with("hotfix/")
+    {
         Color::LightRed
     } else if name.starts_with("chore/") {
         Color::Rgb(140, 140, 160)

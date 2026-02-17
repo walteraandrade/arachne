@@ -1,5 +1,6 @@
 use crate::app::RepoPane;
 use crate::git::types::{CommitSource, Oid};
+use crate::graph::branch_assign::strip_remote_prefix;
 use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,
@@ -22,7 +23,7 @@ pub enum SectionKey {
 #[derive(Debug, Clone)]
 pub enum EntryKind {
     RepoHeader,
-    SectionHeader(SectionKey),
+    SectionHeader { key: SectionKey, count: usize },
     Spacer,
     LocalBranch { is_head: bool, tip: Oid },
     RemoteBranch { tip: Oid },
@@ -48,13 +49,16 @@ impl DisplayEntry {
 
     pub fn section_key(&self) -> Option<&SectionKey> {
         match &self.kind {
-            EntryKind::SectionHeader(key) => Some(key),
+            EntryKind::SectionHeader { ref key, .. } => Some(key),
             _ => None,
         }
     }
 
     pub fn is_header(&self) -> bool {
-        matches!(self.kind, EntryKind::SectionHeader(_) | EntryKind::RepoHeader)
+        matches!(
+            self.kind,
+            EntryKind::SectionHeader { .. } | EntryKind::RepoHeader
+        )
     }
 
     pub fn is_spacer(&self) -> bool {
@@ -76,7 +80,11 @@ impl<'a> Widget for BranchPanel<'a> {
         }
 
         // Header line: "Branches"
-        let header_fg = if self.focused { theme::ACCENT } else { theme::PANEL_LABEL };
+        let header_fg = if self.focused {
+            theme::ACCENT
+        } else {
+            theme::PANEL_LABEL
+        };
         let header_style = Style::default()
             .fg(header_fg)
             .bg(theme::HEADER_BG)
@@ -84,7 +92,12 @@ impl<'a> Widget for BranchPanel<'a> {
         for x in area.x..area.right() {
             buf[(x, area.y)].set_style(Style::default().bg(theme::HEADER_BG));
         }
-        buf.set_line(area.x, area.y, &Line::from(Span::styled("Branches", header_style)), area.width);
+        buf.set_line(
+            area.x,
+            area.y,
+            &Line::from(Span::styled("Branches", header_style)),
+            area.width,
+        );
 
         // Horizontal separator
         if area.height < 3 {
@@ -100,9 +113,19 @@ impl<'a> Widget for BranchPanel<'a> {
         let inner_w = area.width as usize;
         let visible = (area.height.saturating_sub(2)) as usize;
 
-        let sel_bg = if self.focused { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
+        let sel_bg = if self.focused {
+            theme::SELECTED_BG
+        } else {
+            theme::UNFOCUSED_SEL_BG
+        };
 
-        for (i, entry) in self.entries.iter().skip(self.scroll).take(visible).enumerate() {
+        for (i, entry) in self
+            .entries
+            .iter()
+            .skip(self.scroll)
+            .take(visible)
+            .enumerate()
+        {
             let y = inner_y + i as u16;
             let abs_idx = self.scroll + i;
             let is_selected = abs_idx == self.selected;
@@ -150,9 +173,10 @@ pub fn build_entries(
             let key = SectionKey::Local(pane_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+            let count = local.len();
             entries.push(DisplayEntry {
-                label: format!("  {arrow} Local ({})", local.len()),
-                kind: EntryKind::SectionHeader(key),
+                label: format!("  {arrow} Local"),
+                kind: EntryKind::SectionHeader { key, count },
             });
             if !is_collapsed {
                 for b in local {
@@ -162,7 +186,10 @@ pub fn build_entries(
                             if b.is_head { "\u{25b8} " } else { "  " },
                             b.name
                         ),
-                        kind: EntryKind::LocalBranch { is_head: b.is_head, tip: b.tip },
+                        kind: EntryKind::LocalBranch {
+                            is_head: b.is_head,
+                            tip: b.tip,
+                        },
                     });
                 }
             }
@@ -170,24 +197,31 @@ pub fn build_entries(
 
         let remote: Vec<_> = branches
             .iter()
-            .filter(|b| matches!(b.source, CommitSource::Local | CommitSource::Remote(_)) && b.name.contains('/'))
+            .filter(|b| {
+                matches!(b.source, CommitSource::Local | CommitSource::Remote(_))
+                    && b.name.contains('/')
+            })
             .filter(|b| filter.is_empty() || b.name.contains(filter))
             .collect();
 
         if !remote.is_empty() {
             if has_local {
-                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
+                entries.push(DisplayEntry {
+                    label: String::new(),
+                    kind: EntryKind::Spacer,
+                });
             }
             let key = SectionKey::Remote(pane_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+            let count = remote.len();
             entries.push(DisplayEntry {
-                label: format!("  {arrow} Remote ({})", remote.len()),
-                kind: EntryKind::SectionHeader(key),
+                label: format!("  {arrow} Remote"),
+                kind: EntryKind::SectionHeader { key, count },
             });
             if !is_collapsed {
                 for b in remote {
-                    let display_name = b.name.strip_prefix("origin/").unwrap_or(&b.name);
+                    let display_name = strip_remote_prefix(&b.name);
                     entries.push(DisplayEntry {
                         label: format!("    {display_name}"),
                         kind: EntryKind::RemoteBranch { tip: b.tip },
@@ -204,7 +238,10 @@ pub fn build_entries(
                 .collect();
 
             if !forks.is_empty() {
-                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
+                entries.push(DisplayEntry {
+                    label: String::new(),
+                    kind: EntryKind::Spacer,
+                });
                 let mut current_fork = String::new();
                 for b in &forks {
                     if let CommitSource::Fork(ref owner) = b.source {
@@ -213,13 +250,18 @@ pub fn build_entries(
                             let key = SectionKey::Fork(pane_idx, owner.clone());
                             let fork_count = forks
                                 .iter()
-                                .filter(|fb| matches!(&fb.source, CommitSource::Fork(o) if o == owner))
+                                .filter(
+                                    |fb| matches!(&fb.source, CommitSource::Fork(o) if o == owner),
+                                )
                                 .count();
                             let is_collapsed = collapsed.contains(&key);
                             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
                             entries.push(DisplayEntry {
-                                label: format!("  {arrow} Fork: {owner} ({fork_count})"),
-                                kind: EntryKind::SectionHeader(key),
+                                label: format!("  {arrow} Fork: {owner}"),
+                                kind: EntryKind::SectionHeader {
+                                    key,
+                                    count: fork_count,
+                                },
                             });
                             if !is_collapsed {
                                 for fb in &forks {
@@ -243,15 +285,24 @@ pub fn build_entries(
             .collect();
 
         if !filtered_tags.is_empty() {
-            if !entries.is_empty() && !matches!(entries.last().map(|e| &e.kind), Some(EntryKind::Spacer | EntryKind::RepoHeader)) {
-                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
+            if !entries.is_empty()
+                && !matches!(
+                    entries.last().map(|e| &e.kind),
+                    Some(EntryKind::Spacer | EntryKind::RepoHeader)
+                )
+            {
+                entries.push(DisplayEntry {
+                    label: String::new(),
+                    kind: EntryKind::Spacer,
+                });
             }
             let key = SectionKey::Tags(pane_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+            let count = filtered_tags.len();
             entries.push(DisplayEntry {
-                label: format!("  {arrow} Tags ({})", filtered_tags.len()),
-                kind: EntryKind::SectionHeader(key),
+                label: format!("  {arrow} Tags"),
+                kind: EntryKind::SectionHeader { key, count },
             });
             if !is_collapsed {
                 for t in filtered_tags {
@@ -282,7 +333,10 @@ pub fn auto_collapse_defaults(panes: &[RepoPane], filter: &str) -> HashSet<Secti
             .repo_data
             .branches
             .iter()
-            .filter(|b| matches!(b.source, CommitSource::Local | CommitSource::Remote(_)) && b.name.contains('/'))
+            .filter(|b| {
+                matches!(b.source, CommitSource::Local | CommitSource::Remote(_))
+                    && b.name.contains('/')
+            })
             .filter(|b| filter.is_empty() || b.name.contains(filter))
             .count();
         if remote_count > 15 {
@@ -317,12 +371,12 @@ fn truncate_right(s: &str, max_width: usize) -> String {
 fn section_header_line(label: &str, count: usize, selected: bool, width: usize) -> Line<'static> {
     let bold_style = if selected {
         Style::default()
-            .fg(ratatui::style::Color::White)
+            .fg(theme::SECTION_HEADER_FG)
             .bg(theme::SELECTED_BG)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(ratatui::style::Color::White)
+            .fg(theme::SECTION_HEADER_FG)
             .add_modifier(Modifier::BOLD)
     };
 
@@ -333,7 +387,9 @@ fn section_header_line(label: &str, count: usize, selected: bool, width: usize) 
     };
 
     let sep_style = if selected {
-        Style::default().fg(theme::SECTION_SEPARATOR).bg(theme::SELECTED_BG)
+        Style::default()
+            .fg(theme::SECTION_SEPARATOR)
+            .bg(theme::SELECTED_BG)
     } else {
         Style::default().fg(theme::SECTION_SEPARATOR)
     };
@@ -354,35 +410,25 @@ fn split_branch_prefix(name: &str) -> Option<(&str, &str)> {
     let slash = name.find('/')?;
     let prefix = &name[..=slash];
     let rest = &name[slash + 1..];
-    if rest.is_empty() { None } else { Some((prefix, rest)) }
+    if rest.is_empty() {
+        None
+    } else {
+        Some((prefix, rest))
+    }
 }
 
-fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize, _focused: bool) -> Line<'static> {
+fn entry_line(
+    entry: &DisplayEntry,
+    selected: bool,
+    max_width: usize,
+    _focused: bool,
+) -> Line<'static> {
     if matches!(entry.kind, EntryKind::Spacer) {
         return Line::from("");
     }
 
-    // Section headers: parse count from label and render with dim count + separator
-    if let EntryKind::SectionHeader(_) = &entry.kind {
-        if let Some(paren_start) = entry.label.rfind('(') {
-            if let Some(paren_end) = entry.label.rfind(')') {
-                if let Ok(count) = entry.label[paren_start + 1..paren_end].parse::<usize>() {
-                    let base = entry.label[..paren_start].trim_end();
-                    return section_header_line(base, count, selected, max_width);
-                }
-            }
-        }
-        let style = if selected {
-            Style::default()
-                .fg(ratatui::style::Color::White)
-                .bg(theme::SELECTED_BG)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(ratatui::style::Color::White)
-                .add_modifier(Modifier::BOLD)
-        };
-        return Line::from(Span::styled(entry.label.clone(), style));
+    if let EntryKind::SectionHeader { count, .. } = &entry.kind {
+        return section_header_line(&entry.label, *count, selected, max_width);
     }
 
     // Two-tone branch names for branch entries
@@ -409,10 +455,16 @@ fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize, _focused: 
             theme::branch_prefix_color(trimmed)
         };
 
-        let bg = if selected { Some(theme::SELECTED_BG) } else { None };
+        let bg = if selected {
+            Some(theme::SELECTED_BG)
+        } else {
+            None
+        };
 
         let mut indent_style = Style::default();
-        if let Some(b) = bg { indent_style = indent_style.bg(b); }
+        if let Some(b) = bg {
+            indent_style = indent_style.bg(b);
+        }
 
         if let Some((prefix, rest)) = split_branch_prefix(trimmed) {
             let mut prefix_style = Style::default().fg(theme::DIM_PREFIX);
@@ -436,7 +488,9 @@ fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize, _focused: 
         if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
             style = style.add_modifier(Modifier::ITALIC);
         }
-        if let Some(b) = bg { style = style.bg(b); }
+        if let Some(b) = bg {
+            style = style.bg(b);
+        }
         return Line::from(vec![
             Span::styled(indent.to_string(), indent_style),
             Span::styled(trimmed.to_string(), style),
@@ -455,7 +509,11 @@ fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize, _focused: 
         _ => Style::default(),
     };
 
-    let style = if selected { style.bg(theme::SELECTED_BG) } else { style };
+    let style = if selected {
+        style.bg(theme::SELECTED_BG)
+    } else {
+        style
+    };
 
     let label = if !entry.is_header() && max_width > 0 {
         truncate_right(&entry.label, max_width)

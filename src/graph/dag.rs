@@ -192,15 +192,12 @@ mod tests {
 
     #[test]
     fn merge_remote_adds_new_skips_dupes() {
-        let commits = vec![
-            make_commit(1, vec![2], 10),
-            make_commit(2, vec![], 20),
-        ];
+        let commits = vec![make_commit(1, vec![2], 10), make_commit(2, vec![], 20)];
         let mut dag = Dag::from_repo_data(&simple_repo_data(commits));
         assert_eq!(dag.nodes.len(), 2);
 
         let remote = vec![
-            make_commit(2, vec![], 20), // dupe
+            make_commit(2, vec![], 20),  // dupe
             make_commit(3, vec![2], 15), // new
         ];
         dag.merge_remote(remote);

@@ -12,7 +12,10 @@ pub async fn fetch_network_detached(
         let branches = match client.fetch_fork_branches(fork).await {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("warning: fetching branches for {}/{}: {e}", fork.owner, fork.repo);
+                eprintln!(
+                    "warning: fetching branches for {}/{}: {e}",
+                    fork.owner, fork.repo
+                );
                 continue;
             }
         };
@@ -24,7 +27,10 @@ pub async fn fetch_network_detached(
             {
                 Ok(commits) => all_commits.extend(commits),
                 Err(e) => {
-                    eprintln!("warning: fetching commits for {}/{} {}: {e}", fork.owner, fork.repo, branch.name);
+                    eprintln!(
+                        "warning: fetching commits for {}/{} {}: {e}",
+                        fork.owner, fork.repo, branch.name
+                    );
                 }
             }
         }

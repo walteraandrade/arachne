@@ -57,7 +57,8 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
             .target()
             .map(Oid::from_git2)
             .unwrap_or(Oid::zero());
-        let remote_name = name.find('/')
+        let remote_name = name
+            .find('/')
             .map(|i| name[..i].to_string())
             .unwrap_or_else(|| "origin".to_string());
         out.push(BranchInfo {
@@ -74,10 +75,8 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
 fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
     let mut out = Vec::new();
     repo.tag_foreach(|oid, name_bytes| {
-        let name = String::from_utf8_lossy(name_bytes)
-            .strip_prefix("refs/tags/")
-            .unwrap_or(&String::from_utf8_lossy(name_bytes))
-            .to_string();
+        let raw = String::from_utf8_lossy(name_bytes);
+        let name = raw.strip_prefix("refs/tags/").unwrap_or(&raw).to_string();
         let target = repo
             .find_tag(oid)
             .ok()
@@ -140,4 +139,26 @@ fn topo_walk(repo: &Repository, max_commits: usize) -> Result<Vec<CommitInfo>> {
     }
 
     Ok(commits)
+}
+
+pub fn detect_repo_name(repo: &Repository) -> String {
+    repo.find_remote("origin")
+        .ok()
+        .and_then(|remote| remote.url().map(String::from))
+        .and_then(|url| {
+            let url = url.trim_end_matches(".git");
+            if url.contains("github.com") {
+                let parts: Vec<&str> = url.rsplitn(3, '/').collect();
+                if parts.len() >= 2 {
+                    return Some(format!("{}/{}", parts[1], parts[0]));
+                }
+            }
+            url.rsplit('/').next().map(String::from)
+        })
+        .unwrap_or_else(|| {
+            repo.workdir()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        })
 }

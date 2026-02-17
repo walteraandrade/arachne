@@ -1,7 +1,7 @@
 use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Widget},
@@ -25,7 +25,7 @@ pub struct HelpPanel;
 
 impl Widget for HelpPanel {
     fn render(self, area: Rect, buf: &mut Buf) {
-        let popup = centered_rect(50, 60, area);
+        let popup = super::centered_rect(50, 60, area);
         Clear.render(popup, buf);
 
         let block = Block::default()
@@ -53,20 +53,4 @@ impl Widget for HelpPanel {
             buf.set_line(inner.x, y, &line, inner.width);
         }
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vert = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Min(0),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Min(0),
-    ])
-    .split(vert[1])[1]
 }

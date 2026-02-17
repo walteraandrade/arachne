@@ -47,7 +47,11 @@ impl<'a> Widget for GraphView<'a> {
 
         let visible = area.height as usize;
         let avail_w = area.width as usize;
-        let sel_bg = if self.is_active { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
+        let sel_bg = if self.is_active {
+            theme::SELECTED_BG
+        } else {
+            theme::UNFOCUSED_SEL_BG
+        };
 
         for (i, row) in self
             .rows
@@ -65,7 +69,15 @@ impl<'a> Widget for GraphView<'a> {
             let is_selected = abs_idx == self.selected;
             let is_highlighted = self.highlighted_oids.contains(&row.oid);
 
-            let line = build_row_line(row, is_selected, is_highlighted, self.scroll_x, avail_w, self.trunk_count, self.is_active);
+            let line = build_row_line(
+                row,
+                is_selected,
+                is_highlighted,
+                self.scroll_x,
+                avail_w,
+                self.trunk_count,
+                self.is_active,
+            );
             let line_width: usize = line
                 .spans
                 .iter()
@@ -117,11 +129,19 @@ fn build_row_line(
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
     let mut text_spans: Vec<Span<'static>> = Vec::new();
     let is_fork = matches!(row.source, CommitSource::Fork(_));
-    let sel_bg = if is_active { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
+    let sel_bg = if is_active {
+        theme::SELECTED_BG
+    } else {
+        theme::UNFOCUSED_SEL_BG
+    };
 
     // Selection indicator (▎ at column 0)
     if selected {
-        let indicator_fg = if is_active { theme::ACTIVE_BORDER } else { theme::DIM_TEXT };
+        let indicator_fg = if is_active {
+            theme::ACTIVE_BORDER
+        } else {
+            theme::DIM_TEXT
+        };
         graph_spans.push(Span::styled(
             "\u{258e}",
             Style::default().fg(indicator_fg).bg(sel_bg),
@@ -156,17 +176,15 @@ fn build_row_line(
     // Reserve fixed time column (right-aligned, max 4 chars + 1 space padding)
     let time_str = format_time_short(&row.time);
     let time_col_w = 5; // e.g. " 12mo" or "   2h"
-    let mut budget = avail_width.saturating_sub(graph_width).saturating_sub(time_col_w);
+    let mut budget = avail_width
+        .saturating_sub(graph_width)
+        .saturating_sub(time_col_w);
 
     // Branch labels (max 2, with [*name] for HEAD)
     let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
-    let mut shown_branches = 0;
     let max_branches = 2;
     for (i, name) in row.branch_names.iter().enumerate() {
-        if shown_branches >= max_branches {
-            break;
-        }
-        if budget < 4 {
+        if i >= max_branches || budget < 4 {
             break;
         }
         let max_label = budget.min(20);
@@ -177,11 +195,13 @@ fn build_row_line(
         let formatted = format!("[{label}] ");
         let w = UnicodeWidthStr::width(formatted.as_str());
         let style = Style::default()
-            .fg(theme::branch_color_by_identity(commit_color_idx, trunk_count))
+            .fg(theme::branch_color_by_identity(
+                commit_color_idx,
+                trunk_count,
+            ))
             .add_modifier(Modifier::BOLD);
         text_spans.push(Span::styled(formatted, style));
         budget = budget.saturating_sub(w);
-        shown_branches += 1;
     }
 
     // Overflow indicator
