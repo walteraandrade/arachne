@@ -76,3 +76,50 @@ pub struct RepoData {
     pub head: Option<Oid>,
     pub branch_tips: HashSet<Oid>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+
+    #[test]
+    fn from_bytes_roundtrip() {
+        let mut bytes = [0u8; 20];
+        bytes[0] = 0xab;
+        bytes[19] = 0xcd;
+        let oid = Oid::from_bytes(bytes);
+        let display = format!("{oid}");
+        assert!(display.starts_with("ab"));
+        assert!(display.ends_with("cd"));
+        assert_eq!(display.len(), 40);
+    }
+
+    #[test]
+    fn zero_oid() {
+        let z = Oid::zero();
+        assert_eq!(format!("{z}"), "0000000000000000000000000000000000000000");
+    }
+
+    #[test]
+    fn hash_consistency() {
+        let a = Oid::from_bytes([1; 20]);
+        let b = Oid::from_bytes([1; 20]);
+        let c = Oid::from_bytes([2; 20]);
+
+        let hash = |o: &Oid| {
+            let mut h = DefaultHasher::new();
+            o.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash(&a), hash(&b));
+        assert_ne!(hash(&a), hash(&c));
+    }
+
+    #[test]
+    fn ord() {
+        let a = Oid::from_bytes([0; 20]);
+        let b = Oid::from_bytes([1; 20]);
+        assert!(a < b);
+        assert_eq!(a, a);
+    }
+}

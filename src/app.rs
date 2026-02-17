@@ -38,6 +38,8 @@ pub struct RepoPane {
     pub scroll_x: usize,
     pub last_sync: String,
     pub rate_limit: Option<u32>,
+    pub time_sorted_indices: Vec<usize>,
+    pub cached_repo_data: Option<RepoData>,
 }
 
 pub struct App {
@@ -58,6 +60,7 @@ pub struct App {
     pub filter_text: String,
     pub author_filter_text: String,
     pub collapsed_sections: HashSet<SectionKey>,
+    pub error_message: Option<(String, std::time::Instant)>,
 
     pub should_quit: bool,
 }
@@ -80,6 +83,7 @@ impl App {
             filter_text: String::new(),
             author_filter_text: String::new(),
             collapsed_sections: HashSet::new(),
+            error_message: None,
             should_quit: false,
         }
     }
@@ -108,6 +112,8 @@ impl App {
 
             let github_client = init_github_client(&self.config, &repo_name);
 
+            let time_sorted_indices = build_time_sorted_indices(&rows);
+            let cached_repo_data = Some(repo_data.clone());
             self.panes.push(RepoPane {
                 repo: Some(r),
                 repo_data,
@@ -119,6 +125,8 @@ impl App {
                 scroll_x: 0,
                 last_sync: "just now".to_string(),
                 rate_limit: None,
+                time_sorted_indices,
+                cached_repo_data,
             });
         }
         self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.panes, "");
@@ -126,26 +134,49 @@ impl App {
     }
 
     pub fn rebuild_graph(&mut self, pane_idx: usize) {
+        self.rebuild_graph_inner(pane_idx, false);
+    }
+
+    pub fn rebuild_graph_author_only(&mut self, pane_idx: usize) {
+        self.rebuild_graph_inner(pane_idx, true);
+    }
+
+    fn rebuild_graph_inner(&mut self, pane_idx: usize, author_only: bool) {
         if let Some(pane) = self.panes.get_mut(pane_idx) {
-            if let Some(ref r) = pane.repo {
-                if let Ok(mut data) = repo::read_repo(r, self.config.max_commits) {
-                    pane.current_branch = data
-                        .branches
-                        .iter()
-                        .find(|b| b.is_head)
-                        .map(|b| b.name.clone())
-                        .unwrap_or_else(|| "detached".to_string());
-
-                    if !self.author_filter_text.is_empty() {
-                        filter_by_author(&mut data, &self.author_filter_text);
-                    }
-
-                    pane.repo_data = data;
-                    pane.dag = Dag::from_repo_data(&pane.repo_data);
-                    pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data, &self.config.trunk_branches);
-                    pane.last_sync = "just now".to_string();
+            let mut data = if author_only {
+                if let Some(ref cached) = pane.cached_repo_data {
+                    cached.clone()
+                } else {
+                    return;
                 }
+            } else if let Some(ref r) = pane.repo {
+                match repo::read_repo(r, self.config.max_commits) {
+                    Ok(d) => {
+                        pane.cached_repo_data = Some(d.clone());
+                        d
+                    }
+                    Err(_) => return,
+                }
+            } else {
+                return;
+            };
+
+            pane.current_branch = data
+                .branches
+                .iter()
+                .find(|b| b.is_head)
+                .map(|b| b.name.clone())
+                .unwrap_or_else(|| "detached".to_string());
+
+            if !self.author_filter_text.is_empty() {
+                filter_by_author(&mut data, &self.author_filter_text);
             }
+
+            pane.repo_data = data;
+            pane.dag = Dag::from_repo_data(&pane.repo_data);
+            pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data, &self.config.trunk_branches);
+            pane.time_sorted_indices = build_time_sorted_indices(&pane.rows);
+            pane.last_sync = "just now".to_string();
         }
     }
 
@@ -157,10 +188,14 @@ impl App {
                     pane.repo_data.branches.extend(data.branches);
                     pane.dag.merge_remote(data.commits);
                     pane.rows = layout::compute_layout(&pane.dag, &pane.repo_data, &self.config.trunk_branches);
+                    pane.time_sorted_indices = build_time_sorted_indices(&pane.rows);
+                    pane.cached_repo_data = None; // invalidate cache on remote data
                     pane.last_sync = "just now".to_string();
+                    self.error_message = None;
                 }
                 Err(e) => {
                     pane.last_sync = format!("error: {e}");
+                    self.error_message = Some((e, std::time::Instant::now()));
                 }
             }
         }
@@ -289,7 +324,7 @@ impl App {
                 self.filter_mode = FilterMode::Off;
                 if was_author {
                     for idx in 0..self.panes.len() {
-                        self.rebuild_graph(idx);
+                        self.rebuild_graph_author_only(idx);
                     }
                     self.clamp_selected();
                 }
@@ -301,7 +336,7 @@ impl App {
                         self.author_filter_text.clear();
                         self.filter_mode = FilterMode::Off;
                         for idx in 0..self.panes.len() {
-                            self.rebuild_graph(idx);
+                            self.rebuild_graph_author_only(idx);
                         }
                         self.clamp_selected();
                         return;
@@ -381,7 +416,7 @@ impl App {
             None => return (0, 0),
         };
 
-        let closest_idx = find_closest_by_time(&target.rows, anchor_time);
+        let closest_idx = find_closest_by_time_binary(&target.rows, &target.time_sorted_indices, anchor_time);
         let scroll_y = closest_idx.saturating_sub(visible_height / 2);
         (scroll_y, closest_idx)
     }
@@ -415,6 +450,7 @@ impl App {
                     name: &p.repo_name,
                     branch: &p.current_branch,
                     is_active: i == self.active_pane,
+                    commit_count: p.rows.len(),
                 })
                 .collect();
             let last_sync = self.panes.get(self.active_pane)
@@ -423,6 +459,7 @@ impl App {
             let header = HeaderBar {
                 panes: &pane_infos,
                 last_sync,
+                author_filter: &self.author_filter_text,
             };
             frame.render_widget(header, header_area);
         }
@@ -528,14 +565,27 @@ impl App {
             frame.render_widget(graph_view, pane_chunks[idx]);
         }
 
+        // Auto-dismiss error after 30s
+        if let Some((_, instant)) = &self.error_message {
+            if instant.elapsed() > std::time::Duration::from_secs(30) {
+                self.error_message = None;
+            }
+        }
+
         // Status bar
         let active = self.panes.get(self.active_pane);
+        let error_msg = self.error_message.as_ref().map(|(msg, _)| msg.as_str());
+        let commit_count = active.map(|p| p.rows.len()).unwrap_or(0);
+        let branch_count = active.map(|p| p.repo_data.branches.len()).unwrap_or(0);
         let status = StatusBar {
             branch_name: active.map(|p| p.current_branch.as_str()).unwrap_or(""),
             last_sync: active.map(|p| p.last_sync.as_str()).unwrap_or("never"),
             filter_mode: self.filter_mode,
             filter_text: &self.filter_text,
             author_filter_text: &self.author_filter_text,
+            error_message: error_msg,
+            commit_count,
+            branch_count,
         };
         frame.render_widget(status, status_area);
 
@@ -578,23 +628,33 @@ impl App {
     }
 }
 
-fn find_closest_by_time(
+fn build_time_sorted_indices(rows: &[GraphRow]) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..rows.len()).collect();
+    indices.sort_by(|&a, &b| rows[b].time.cmp(&rows[a].time));
+    indices
+}
+
+fn find_closest_by_time_binary(
     rows: &[GraphRow],
+    sorted_indices: &[usize],
     target: chrono::DateTime<chrono::Utc>,
 ) -> usize {
     if rows.is_empty() {
         return 0;
     }
-    let mut best = 0;
-    let mut best_diff = i64::MAX;
-    for (i, row) in rows.iter().enumerate() {
-        let diff = (row.time - target).num_seconds().abs();
-        if diff < best_diff {
-            best_diff = diff;
-            best = i;
-        }
+    // sorted_indices is sorted by time descending
+    let pos = sorted_indices.partition_point(|&i| rows[i].time > target);
+    if pos == 0 {
+        return sorted_indices[0];
     }
-    best
+    if pos >= sorted_indices.len() {
+        return *sorted_indices.last().unwrap();
+    }
+    let before = sorted_indices[pos - 1];
+    let after = sorted_indices[pos];
+    let diff_before = (rows[before].time - target).num_seconds().abs();
+    let diff_after = (rows[after].time - target).num_seconds().abs();
+    if diff_before <= diff_after { before } else { after }
 }
 
 fn init_github_client(config: &Config, repo_name: &str) -> Option<GitHubClient> {

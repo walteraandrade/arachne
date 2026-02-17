@@ -124,3 +124,120 @@ fn kahns_topo_sort(nodes: &HashMap<Oid, DagNode>) -> Vec<Oid> {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+
+    fn simple_repo_data(commits: Vec<CommitInfo>) -> RepoData {
+        let tip = commits[0].oid;
+        make_repo_data(
+            commits,
+            vec![crate::git::types::BranchInfo {
+                name: "main".to_string(),
+                tip,
+                is_head: true,
+                source: crate::git::types::CommitSource::Local,
+            }],
+        )
+    }
+
+    #[test]
+    fn linear_chain() {
+        let commits = vec![
+            make_commit(1, vec![2], 10),
+            make_commit(2, vec![3], 20),
+            make_commit(3, vec![], 30),
+        ];
+        let dag = Dag::from_repo_data(&simple_repo_data(commits));
+
+        assert_eq!(dag.topo_order.len(), 3);
+        assert_eq!(dag.topo_order[0], make_oid(1));
+        assert_eq!(dag.topo_order[1], make_oid(2));
+        assert_eq!(dag.topo_order[2], make_oid(3));
+
+        assert_eq!(dag.nodes[&make_oid(3)].children, vec![make_oid(2)]);
+        assert_eq!(dag.nodes[&make_oid(2)].children, vec![make_oid(1)]);
+        assert!(dag.nodes[&make_oid(1)].children.is_empty());
+    }
+
+    #[test]
+    fn diamond_merge() {
+        // 1 merges 2+3, both parent 4
+        let commits = vec![
+            make_commit(1, vec![2, 3], 10),
+            make_commit(2, vec![4], 20),
+            make_commit(3, vec![4], 25),
+            make_commit(4, vec![], 30),
+        ];
+        let dag = Dag::from_repo_data(&simple_repo_data(commits));
+
+        assert_eq!(dag.topo_order.len(), 4);
+        assert_eq!(dag.topo_order[0], make_oid(1));
+
+        let node4 = &dag.nodes[&make_oid(4)];
+        assert_eq!(node4.children.len(), 2);
+        assert!(node4.children.contains(&make_oid(2)));
+        assert!(node4.children.contains(&make_oid(3)));
+    }
+
+    #[test]
+    fn empty_repo() {
+        let data = make_repo_data(vec![], vec![]);
+        let dag = Dag::from_repo_data(&data);
+        assert!(dag.nodes.is_empty());
+        assert!(dag.topo_order.is_empty());
+    }
+
+    #[test]
+    fn merge_remote_adds_new_skips_dupes() {
+        let commits = vec![
+            make_commit(1, vec![2], 10),
+            make_commit(2, vec![], 20),
+        ];
+        let mut dag = Dag::from_repo_data(&simple_repo_data(commits));
+        assert_eq!(dag.nodes.len(), 2);
+
+        let remote = vec![
+            make_commit(2, vec![], 20), // dupe
+            make_commit(3, vec![2], 15), // new
+        ];
+        dag.merge_remote(remote);
+
+        assert_eq!(dag.nodes.len(), 3);
+        assert!(dag.nodes.contains_key(&make_oid(3)));
+        // new commit should be wired as child of 2
+        assert!(dag.nodes[&make_oid(2)].children.contains(&make_oid(3)));
+    }
+
+    #[test]
+    fn kahns_sort_time_tiebreaking() {
+        // Two tips with no relationship — newer should come first
+        let commits = vec![
+            make_commit(1, vec![], 10), // newer
+            make_commit(2, vec![], 20), // older
+        ];
+        let data = make_repo_data(
+            commits,
+            vec![
+                crate::git::types::BranchInfo {
+                    name: "a".to_string(),
+                    tip: make_oid(1),
+                    is_head: true,
+                    source: crate::git::types::CommitSource::Local,
+                },
+                crate::git::types::BranchInfo {
+                    name: "b".to_string(),
+                    tip: make_oid(2),
+                    is_head: false,
+                    source: crate::git::types::CommitSource::Local,
+                },
+            ],
+        );
+        let dag = Dag::from_repo_data(&data);
+        // Newer (1) should come before older (2) due to time tiebreaking
+        assert_eq!(dag.topo_order[0], make_oid(1));
+        assert_eq!(dag.topo_order[1], make_oid(2));
+    }
+}

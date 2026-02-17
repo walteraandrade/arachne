@@ -1,0 +1,11 @@
+#!/bin/bash
+ARACHNE="${HOME}/.cargo/bin/arachne"
+[[ -x "$ARACHNE" ]] || ARACHNE="$(which arachne 2>/dev/null)"
+
+if [[ ! -x "$ARACHNE" ]]; then
+  echo "Error: arachne not found" >&2
+  exit 1
+fi
+
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor/ 2>/dev/null
+exec "$ARACHNE" "$@"

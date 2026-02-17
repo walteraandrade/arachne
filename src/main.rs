@@ -5,6 +5,8 @@ mod event;
 mod git;
 mod github;
 mod graph;
+#[cfg(test)]
+mod test_utils;
 mod ui;
 mod watcher;
 

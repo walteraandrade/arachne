@@ -258,37 +258,18 @@ pub fn format_time_short(time: &chrono::DateTime<chrono::Utc>) -> String {
 mod tests {
     use super::*;
     use crate::git::types::*;
-
-    fn make_oid(val: u8) -> Oid {
-        let mut bytes = [0u8; 20];
-        bytes[0] = val;
-        Oid::from_bytes(bytes)
-    }
-
-    fn make_commit(val: u8, parents: Vec<u8>, secs_ago: i64) -> CommitInfo {
-        CommitInfo {
-            oid: make_oid(val),
-            parents: parents.into_iter().map(make_oid).collect(),
-            message: format!("commit {val}"),
-            author: "test".to_string(),
-            time: chrono::Utc::now() - chrono::Duration::seconds(secs_ago),
-            source: CommitSource::Local,
-        }
-    }
+    use crate::test_utils::*;
 
     fn layout_from_commits(commits: Vec<CommitInfo>) -> Vec<GraphRow> {
-        let data = RepoData {
-            commits: commits.clone(),
-            branches: vec![BranchInfo {
+        let data = make_repo_data(
+            commits.clone(),
+            vec![BranchInfo {
                 name: "main".to_string(),
                 tip: commits[0].oid,
                 is_head: true,
                 source: CommitSource::Local,
             }],
-            tags: vec![],
-            head: Some(commits[0].oid),
-            branch_tips: [commits[0].oid].into_iter().collect(),
-        };
+        );
         let dag = Dag::from_repo_data(&data);
         compute_layout(&dag, &data, &[])
     }
@@ -357,9 +338,9 @@ mod tests {
             make_commit(3, vec![4], 20),
             make_commit(4, vec![], 30),
         ];
-        let data = RepoData {
-            commits: commits.clone(),
-            branches: vec![
+        let data = make_repo_data(
+            commits.clone(),
+            vec![
                 BranchInfo {
                     name: "main".to_string(),
                     tip: commits[0].oid,
@@ -373,13 +354,90 @@ mod tests {
                     source: CommitSource::Local,
                 },
             ],
-            tags: vec![],
-            head: Some(commits[0].oid),
-            branch_tips: [commits[0].oid, commits[1].oid].into_iter().collect(),
-        };
+        );
         let dag = Dag::from_repo_data(&data);
         let rows = compute_layout(&dag, &data, &[]);
-
         assert_eq!(rows.len(), 4);
+    }
+
+    #[test]
+    fn trunk_lane_reservation() {
+        let commits = vec![
+            make_commit(1, vec![2], 10),
+            make_commit(2, vec![], 20),
+        ];
+        let data = make_repo_data(
+            commits,
+            vec![BranchInfo {
+                name: "main".to_string(),
+                tip: make_oid(1),
+                is_head: true,
+                source: CommitSource::Local,
+            }],
+        );
+        let dag = Dag::from_repo_data(&data);
+        let trunk = vec!["main".to_string()];
+        let rows = compute_layout(&dag, &data, &trunk);
+
+        // trunk commits should be in lane 0
+        for row in &rows {
+            assert_eq!(row.cells[0].symbol, CellSymbol::Commit);
+        }
+    }
+
+    #[test]
+    fn feature_branch_nonreserved_lane() {
+        let commits = vec![
+            make_commit(1, vec![3], 10),
+            make_commit(2, vec![3], 15),
+            make_commit(3, vec![], 20),
+        ];
+        let data = make_repo_data(
+            commits,
+            vec![
+                BranchInfo {
+                    name: "main".to_string(),
+                    tip: make_oid(1),
+                    is_head: true,
+                    source: CommitSource::Local,
+                },
+                BranchInfo {
+                    name: "feat/x".to_string(),
+                    tip: make_oid(2),
+                    is_head: false,
+                    source: CommitSource::Local,
+                },
+            ],
+        );
+        let dag = Dag::from_repo_data(&data);
+        let trunk = vec!["main".to_string()];
+        let rows = compute_layout(&dag, &data, &trunk);
+
+        // feature branch commit should not be in reserved lane 0
+        let feat_row = rows.iter().find(|r| r.oid == make_oid(2)).unwrap();
+        let commit_col = feat_row.cells.iter().position(|c| c.symbol == CellSymbol::Commit).unwrap();
+        assert!(commit_col >= 1, "feature should be in lane >= reserved_count");
+    }
+
+    #[test]
+    fn merge_cell_symbols() {
+        // commit 1 merges 2 and 3
+        let commits = vec![
+            make_commit(1, vec![2, 3], 10),
+            make_commit(2, vec![4], 20),
+            make_commit(3, vec![4], 25),
+            make_commit(4, vec![], 30),
+        ];
+        let rows = layout_from_commits(commits);
+
+        // merge row should contain branch/merge symbols
+        let merge_row = &rows[0];
+        let has_merge_sym = merge_row.cells.iter().any(|c| {
+            matches!(
+                c.symbol,
+                CellSymbol::MergeDown | CellSymbol::MergeUp | CellSymbol::BranchRight | CellSymbol::BranchLeft
+            )
+        });
+        assert!(has_merge_sym, "merge commit should have merge/branch cells");
     }
 }

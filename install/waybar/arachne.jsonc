@@ -1,0 +1,8 @@
+{
+  "custom/arachne": {
+    "format": "<span font='CaskaydiaMono Nerd Font'>󰊢</span>",
+    "tooltip": "Git network graph",
+    "on-click": "omarchy-launch-or-focus-tui arachne",
+    "signal": 11
+  }
+}

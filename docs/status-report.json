@@ -1,0 +1,77 @@
+{
+  "project": "arachne",
+  "date": "2026-02-17",
+  "completed": {
+    "install_surfaces": {
+      "description": "Full omarchy integration matching mr-argus pattern",
+      "files_created": [
+        "install/applications/icons/arachne.svg",
+        "install/applications/arachne.desktop",
+        "install/hypr/bindings.conf",
+        "install/bin/arachne",
+        "install/waybar/arachne.jsonc",
+        "install/waybar/arachne.css",
+        "install/mako/arachne"
+      ],
+      "system_installed_to": [
+        "~/.local/share/applications/arachne.desktop",
+        "~/.local/share/icons/hicolor/scalable/apps/arachne.svg",
+        "~/.local/bin/arachne",
+        "~/.config/mako/criteria.d/arachne",
+        "~/.config/hypr/bindings.conf (appended Super+Shift+G)",
+        "~/.config/waybar/config.jsonc (added custom/arachne module)",
+        "~/.config/waybar/style.css (added #custom-arachne rule)"
+      ],
+      "binary": "cargo install --path . → ~/.cargo/bin/arachne"
+    },
+    "documentation": {
+      "files_created": [
+        "README.md (rewritten — mythology context, features, config, keybindings)",
+        "docs/architecture.md (pipeline, module tree, event arch, time-sync)",
+        "docs/omarchy-integration.md (per-surface install, signal table)"
+      ]
+    }
+  },
+  "known_issues": {
+    "waybar_icon_not_rendering": {
+      "symptom": "󰊢 (nf-md-source_branch) glyph not visible in waybar",
+      "likely_cause": "Waybar module is static (no exec, no return-type json) so format string renders as plain text, but glyph may not be in waybar's configured font, or waybar needs a label wrapper",
+      "possible_fixes": [
+        "Wrap glyph in pango span with explicit nerd font: \"format\": \"<span font='CaskaydiaMono Nerd Font'>󰊢</span>\"",
+        "Switch to a simpler ASCII/unicode char if font doesn't include nf-md glyphs",
+        "Add return-type json with a small exec script like waybar-claude does for mr-argus"
+      ],
+      "files": [
+        "~/.config/waybar/config.jsonc",
+        "install/waybar/arachne.jsonc"
+      ]
+    },
+    "desktop_icon_svg": {
+      "symptom": "SVG icon may not render in all contexts (walker, app launchers)",
+      "likely_cause": "gtk-update-icon-cache not run, or SVG needs rasterized variants",
+      "fix": "Run: gtk-update-icon-cache ~/.local/share/icons/hicolor/"
+    }
+  },
+  "out_of_scope_todo": {
+    "ui_header_bar": {
+      "description": "Header bar needs visual refinement — currently functional but minimal styling",
+      "current_state": "Shows pane tabs (repo name + branch) and sync status, but layout/styling doesn't match the polished look in screenshots",
+      "files": ["src/ui/header_bar.rs"],
+      "work_needed": [
+        "Better spacing/alignment of pane info segments",
+        "Richer info display (commit count, active filters, etc.)",
+        "Visual separator treatment between header elements"
+      ]
+    },
+    "ui_footer_status_bar": {
+      "description": "Status bar needs richer information and styling",
+      "current_state": "Shows branch name, sync time, and filter state — basic single-line",
+      "files": ["src/ui/status_bar.rs"],
+      "work_needed": [
+        "Add keybinding hints (like ? help shown in screenshots)",
+        "Show graph stats (commit count, branch count)",
+        "Proper left/center/right layout sections"
+      ]
+    }
+  }
+}

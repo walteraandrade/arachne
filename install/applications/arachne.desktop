@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Arachne
+Comment=TUI git network graph viewer
+Exec=omarchy-launch-tui arachne
+Icon=arachne
+Terminal=false
+Type=Application
+Categories=Development;RevisionControl;
+StartupWMClass=org.omarchy.arachne

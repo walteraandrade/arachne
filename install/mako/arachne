@@ -1,0 +1,2 @@
+[app-name=arachne]
+on-button-left=exec sh -c 'makoctl dismiss -n "$id"; omarchy-launch-or-focus-tui arachne'
