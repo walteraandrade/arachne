@@ -1,5 +1,5 @@
 use crate::git::types::{BranchInfo, Oid, RepoData, TagInfo};
-use crate::graph::branch_assign::assign_commits_to_branches;
+use crate::graph::branch_assign::{assign_commits_to_branches, strip_remote_prefix};
 use crate::graph::dag::Dag;
 use crate::graph::types::*;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
 
     for (trunk_idx, trunk_name) in trunk_branches.iter().enumerate() {
         if let Some(branch) = repo_data.branches.iter().find(|b| {
-            let name = b.name.strip_prefix("origin/").unwrap_or(&b.name);
+            let name = strip_remote_prefix(&b.name);
             name == trunk_name
         }) {
             state.columns[trunk_idx] = Some(branch.tip);

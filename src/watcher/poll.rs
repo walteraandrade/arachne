@@ -7,7 +7,8 @@ pub async fn start_github_poller(
     pane_idx: usize,
     interval_secs: u64,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+    let secs = interval_secs.max(5);
+    let mut interval = tokio::time::interval(Duration::from_secs(secs));
     interval.tick().await;
 
     loop {

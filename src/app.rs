@@ -63,6 +63,7 @@ pub struct App {
     pub author_filter_text: String,
     pub collapsed_sections: HashSet<SectionKey>,
     pub error_message: Option<(String, std::time::Instant)>,
+    cached_entries: Vec<DisplayEntry>,
 
     pub should_quit: bool,
 }
@@ -86,6 +87,7 @@ impl App {
             author_filter_text: String::new(),
             collapsed_sections: HashSet::new(),
             error_message: None,
+            cached_entries: Vec::new(),
             should_quit: false,
         }
     }
@@ -127,15 +129,27 @@ impl App {
             });
         }
         self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.panes, "");
+        self.refresh_entries();
         Ok(())
+    }
+
+    fn refresh_entries(&mut self) {
+        self.cached_entries = branch_panel::build_entries(
+            &self.panes,
+            &self.filter_text,
+            self.show_forks,
+            &self.collapsed_sections,
+        );
     }
 
     pub fn rebuild_graph(&mut self, pane_idx: usize) {
         self.rebuild_graph_inner(pane_idx, false);
+        self.refresh_entries();
     }
 
     pub fn rebuild_graph_author_only(&mut self, pane_idx: usize) {
         self.rebuild_graph_inner(pane_idx, true);
+        self.refresh_entries();
     }
 
     fn rebuild_graph_inner(&mut self, pane_idx: usize, author_only: bool) {
@@ -203,6 +217,7 @@ impl App {
                 }
             }
         }
+        self.refresh_entries();
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
@@ -231,18 +246,14 @@ impl App {
                     }
                 }
                 Panel::Branches => {
-                    let entries = branch_panel::build_entries(
-                        &self.panes,
-                        &self.filter_text,
-                        self.show_forks,
-                        &self.collapsed_sections,
-                    );
-                    if !entries.is_empty() {
+                    if !self.cached_entries.is_empty() {
                         let mut next = self.branch_selected + 1;
-                        while next < entries.len() && entries[next].is_spacer() {
+                        while next < self.cached_entries.len()
+                            && self.cached_entries[next].is_spacer()
+                        {
                             next += 1;
                         }
-                        if next < entries.len() {
+                        if next < self.cached_entries.len() {
                             self.branch_selected = next;
                         }
                     }
@@ -256,18 +267,12 @@ impl App {
                     }
                 }
                 Panel::Branches => {
-                    let entries = branch_panel::build_entries(
-                        &self.panes,
-                        &self.filter_text,
-                        self.show_forks,
-                        &self.collapsed_sections,
-                    );
-                    if self.branch_selected > 0 {
+                    if !self.cached_entries.is_empty() && self.branch_selected > 0 {
                         let mut prev = self.branch_selected - 1;
-                        while prev > 0 && entries[prev].is_spacer() {
+                        while prev > 0 && self.cached_entries[prev].is_spacer() {
                             prev -= 1;
                         }
-                        if !entries[prev].is_spacer() {
+                        if !self.cached_entries[prev].is_spacer() {
                             self.branch_selected = prev;
                         }
                     }
@@ -308,17 +313,24 @@ impl App {
                     self.show_detail = !self.show_detail;
                 }
             }
-            Action::ToggleForks => self.show_forks = !self.show_forks,
+            Action::ToggleForks => {
+                self.show_forks = !self.show_forks;
+                self.refresh_entries();
+            }
             Action::Filter => self.filter_mode = FilterMode::Branch,
             Action::AuthorFilter => self.filter_mode = FilterMode::Author,
             Action::FilterChar(c) => match self.filter_mode {
-                FilterMode::Branch => self.filter_text.push(c),
+                FilterMode::Branch => {
+                    self.filter_text.push(c);
+                    self.refresh_entries();
+                }
                 FilterMode::Author => self.author_filter_text.push(c),
                 FilterMode::Off => {}
             },
             Action::FilterBackspace => match self.filter_mode {
                 FilterMode::Branch => {
                     self.filter_text.pop();
+                    self.refresh_entries();
                 }
                 FilterMode::Author => {
                     self.author_filter_text.pop();
@@ -334,6 +346,7 @@ impl App {
                     }
                     self.clamp_selected();
                 }
+                self.refresh_entries();
             }
             Action::FilterCancel => {
                 match self.filter_mode {
@@ -345,11 +358,13 @@ impl App {
                             self.rebuild_graph_author_only(idx);
                         }
                         self.clamp_selected();
+                        self.refresh_entries();
                         return;
                     }
                     FilterMode::Off => {}
                 }
                 self.filter_mode = FilterMode::Off;
+                self.refresh_entries();
             }
             Action::Refresh => {
                 for idx in 0..self.panes.len() {
@@ -374,19 +389,15 @@ impl App {
     }
 
     fn toggle_branch_section(&mut self) {
-        let entries = branch_panel::build_entries(
-            &self.panes,
-            &self.filter_text,
-            self.show_forks,
-            &self.collapsed_sections,
-        );
-        if let Some(entry) = entries.get(self.branch_selected) {
+        if let Some(entry) = self.cached_entries.get(self.branch_selected) {
             if let Some(key) = entry.section_key() {
-                if self.collapsed_sections.contains(key) {
-                    self.collapsed_sections.remove(key);
+                let key = key.clone();
+                if self.collapsed_sections.contains(&key) {
+                    self.collapsed_sections.remove(&key);
                 } else {
-                    self.collapsed_sections.insert(key.clone());
+                    self.collapsed_sections.insert(key);
                 }
+                self.refresh_entries();
             } else if let Some(tip) = entry.tip_oid() {
                 if let Some(pane) = self.panes.get(self.active_pane) {
                     if let Some(idx) = pane.rows.iter().position(|r| r.oid == tip) {
@@ -473,14 +484,9 @@ impl App {
             frame.render_widget(header, header_area);
         }
 
-        // Build entries for branch panel width calculation
-        let entries = branch_panel::build_entries(
-            &self.panes,
-            &self.filter_text,
-            self.show_forks,
-            &self.collapsed_sections,
-        );
-        let max_w = branch_panel::max_entry_width(&entries);
+        // Refresh cached entries for branch panel
+        self.refresh_entries();
+        let max_w = branch_panel::max_entry_width(&self.cached_entries);
         let term_w = size.width as usize;
         let panel_w = (max_w + 2).clamp(20, (term_w / 3).max(20)) as u16;
 
@@ -518,7 +524,7 @@ impl App {
         let visible_height = graph_area.height as usize;
         self.ensure_scroll_bounds(visible_height);
 
-        let highlighted: HashSet<_> = self.get_highlighted_oids(&entries);
+        let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
 
         // Branch panel scroll
         let branch_visible = branch_area.height.saturating_sub(2) as usize;
@@ -532,7 +538,7 @@ impl App {
         }
 
         let branch_panel = BranchPanel {
-            entries: &entries,
+            entries: &self.cached_entries,
             selected: self.branch_selected,
             scroll: self.branch_scroll,
             focused: self.active_panel == Panel::Branches,
@@ -659,11 +665,12 @@ fn find_closest_by_time_binary(
     sorted_indices: &[usize],
     target: chrono::DateTime<chrono::Utc>,
 ) -> usize {
-    if rows.is_empty() {
+    if rows.is_empty() || sorted_indices.is_empty() {
         return 0;
     }
     // sorted_indices is sorted by time descending
-    let pos = sorted_indices.partition_point(|&i| rows[i].time > target);
+    let pos =
+        sorted_indices.partition_point(|&i| rows.get(i).map(|r| r.time > target).unwrap_or(false));
     if pos == 0 {
         return sorted_indices[0];
     }
@@ -672,8 +679,14 @@ fn find_closest_by_time_binary(
     }
     let before = sorted_indices[pos - 1];
     let after = sorted_indices[pos];
-    let diff_before = (rows[before].time - target).num_seconds().abs();
-    let diff_after = (rows[after].time - target).num_seconds().abs();
+    let diff_before = rows
+        .get(before)
+        .map(|r| (r.time - target).num_seconds().abs())
+        .unwrap_or(i64::MAX);
+    let diff_after = rows
+        .get(after)
+        .map(|r| (r.time - target).num_seconds().abs())
+        .unwrap_or(i64::MAX);
     if diff_before <= diff_after {
         before
     } else {

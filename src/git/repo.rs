@@ -6,7 +6,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 pub fn open_repo(path: &Path) -> Result<Repository> {
-    Repository::discover(path).map_err(|_| ArachneError::NotARepo(path.display().to_string()))
+    Repository::discover(path)
+        .map_err(|e| ArachneError::NotARepo(format!("{}: {e}", path.display())))
 }
 
 pub fn read_repo(repo: &Repository, max_commits: usize) -> Result<RepoData> {

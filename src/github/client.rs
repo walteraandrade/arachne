@@ -4,6 +4,9 @@ use crate::github::types::ForkInfo;
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 
+const MAX_FORKS: usize = 50;
+const MAX_BRANCHES_PER_FORK: usize = 100;
+
 #[derive(Clone)]
 pub struct GitHubClient {
     octo: Octocrab,
@@ -52,9 +55,12 @@ impl GitHubClient {
                     .unwrap_or_default();
                 let name = fork.name.clone();
                 forks.push(ForkInfo { owner, repo: name });
+                if forks.len() >= MAX_FORKS {
+                    break;
+                }
             }
 
-            if result.next.is_none() {
+            if forks.len() >= MAX_FORKS || result.next.is_none() {
                 break;
             }
             page += 1;
@@ -90,9 +96,12 @@ impl GitHubClient {
                     is_head: false,
                     source: CommitSource::Fork(fork.owner.clone()),
                 });
+                if branches.len() >= MAX_BRANCHES_PER_FORK {
+                    break;
+                }
             }
 
-            if result.next.is_none() {
+            if branches.len() >= MAX_BRANCHES_PER_FORK || result.next.is_none() {
                 break;
             }
             page += 1;
