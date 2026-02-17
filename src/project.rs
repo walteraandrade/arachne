@@ -2,6 +2,7 @@ use crate::data_source::{LocalSource, RemoteSource, ViewMode};
 use crate::git::types::RepoData;
 use crate::github::client::GitHubClient;
 use crate::graph::{dag::Dag, layout, types::GraphRow};
+use std::collections::HashMap;
 
 pub struct Project {
     pub name: String,
@@ -11,6 +12,8 @@ pub struct Project {
     pub repo_data: RepoData,
     pub dag: Dag,
     pub rows: Vec<GraphRow>,
+    pub branch_index_to_name: HashMap<usize, String>,
+    pub trunk_count: usize,
     pub current_branch: String,
     pub scroll_x: usize,
     pub last_sync: String,
@@ -26,7 +29,10 @@ impl Project {
 
     pub fn rebuild_layout(&mut self, trunk_branches: &[String]) {
         self.dag = Dag::from_repo_data(&self.repo_data);
-        self.rows = layout::compute_layout(&self.dag, &self.repo_data, trunk_branches);
+        let result = layout::compute_layout(&self.dag, &self.repo_data, trunk_branches);
+        self.rows = result.rows;
+        self.branch_index_to_name = result.branch_index_to_name;
+        self.trunk_count = result.trunk_count;
         self.time_sorted_indices = build_time_sorted_indices(&self.rows);
     }
 }

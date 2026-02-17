@@ -1,5 +1,6 @@
 use crate::git::types::{CommitSource, Oid};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CellSymbol {
@@ -18,6 +19,7 @@ pub enum CellSymbol {
 pub struct Cell {
     pub symbol: CellSymbol,
     pub color_index: usize,
+    pub trunk_index: Option<usize>,
 }
 
 impl Cell {
@@ -25,6 +27,7 @@ impl Cell {
         Self {
             symbol,
             color_index,
+            trunk_index: None,
         }
     }
 
@@ -32,20 +35,7 @@ impl Cell {
         Self {
             symbol: CellSymbol::Empty,
             color_index: 0,
-        }
-    }
-
-    pub fn to_chars(&self) -> &'static str {
-        match self.symbol {
-            CellSymbol::Commit => "◯ ",
-            CellSymbol::Vertical => "│ ",
-            CellSymbol::HorizontalLeft => "──",
-            CellSymbol::HorizontalRight => "──",
-            CellSymbol::MergeDown => "╭─",
-            CellSymbol::MergeUp => "╰─",
-            CellSymbol::BranchRight => "─╮",
-            CellSymbol::BranchLeft => "─╯",
-            CellSymbol::Empty => "  ",
+            trunk_index: None,
         }
     }
 }
@@ -61,7 +51,20 @@ pub struct GraphRow {
     pub branch_names: Vec<String>,
     pub tag_names: Vec<String>,
     pub is_head: bool,
+    pub lane_branches: Vec<Option<usize>>,
+    pub branch_index: Option<usize>,
+    pub is_merge: bool,
+    pub is_fork_point: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct LayoutResult {
+    pub rows: Vec<GraphRow>,
+    pub branch_index_to_name: HashMap<usize, String>,
+    pub trunk_count: usize,
+}
+
+pub const MAX_LANES: usize = 64;
 
 #[derive(Clone, Debug, Default)]
 pub struct LayoutState {
@@ -95,6 +98,10 @@ impl LayoutState {
             let idx = pos + self.reserved_count;
             self.columns[idx] = Some(oid);
             idx
+        } else if self.columns.len() >= MAX_LANES {
+            let last = self.columns.len() - 1;
+            self.columns[last] = Some(oid);
+            last
         } else {
             self.columns.push(Some(oid));
             self.columns.len() - 1

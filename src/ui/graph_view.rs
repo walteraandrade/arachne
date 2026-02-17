@@ -1,6 +1,6 @@
 use crate::git::types::CommitSource;
 use crate::graph::layout::format_time_short;
-use crate::graph::types::GraphRow;
+use crate::graph::types::{Cell, CellSymbol, GraphRow};
 use crate::ui::theme::{self, ThemePalette};
 use ratatui::{
     buffer::Buffer as Buf,
@@ -9,7 +9,30 @@ use ratatui::{
     text::{Line, Span},
     widgets::Widget,
 };
+use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
+
+const TRUNK_VERT_CHARS: &[&str] = &["┃ ", "╏ ", "┇ "];
+
+fn cell_glyph(cell: &Cell) -> &'static str {
+    match cell.symbol {
+        CellSymbol::Commit => "◯ ",
+        CellSymbol::Vertical => {
+            if let Some(ti) = cell.trunk_index {
+                TRUNK_VERT_CHARS.get(ti).copied().unwrap_or("┃ ")
+            } else {
+                "│ "
+            }
+        }
+        CellSymbol::HorizontalLeft => "──",
+        CellSymbol::HorizontalRight => "──",
+        CellSymbol::MergeDown => "╭─",
+        CellSymbol::MergeUp => "╰─",
+        CellSymbol::BranchRight => "─╮",
+        CellSymbol::BranchLeft => "─╯",
+        CellSymbol::Empty => "  ",
+    }
+}
 
 pub struct GraphView<'a> {
     pub rows: &'a [GraphRow],
@@ -20,6 +43,7 @@ pub struct GraphView<'a> {
     pub is_active: bool,
     pub trunk_count: usize,
     pub palette: &'a ThemePalette,
+    pub branch_index_to_name: &'a HashMap<usize, String>,
 }
 
 impl<'a> Widget for GraphView<'a> {
@@ -36,8 +60,22 @@ impl<'a> Widget for GraphView<'a> {
             }
         }
 
-        let visible = area.height as usize;
         let avail_w = area.width as usize;
+
+        // Lane legend header (1 row)
+        let header_y = area.y;
+        render_lane_header(
+            buf,
+            header_y,
+            area.x,
+            avail_w,
+            self.rows.get(self.scroll_y),
+            self.branch_index_to_name,
+            self.trunk_count,
+        );
+
+        let commit_area_top = area.y + 1;
+        let visible = (area.height as usize).saturating_sub(1);
         let sel_bg = if self.is_active {
             self.palette.selected_bg
         } else {
@@ -51,7 +89,7 @@ impl<'a> Widget for GraphView<'a> {
             .take(visible)
             .enumerate()
         {
-            let y = area.y + i as u16;
+            let y = commit_area_top + i as u16;
             if y >= area.y + area.height {
                 break;
             }
@@ -68,6 +106,7 @@ impl<'a> Widget for GraphView<'a> {
                 avail_w,
                 self.trunk_count,
                 self.is_active,
+                self.branch_index_to_name,
             );
             let line_width: usize = line
                 .spans
@@ -84,6 +123,71 @@ impl<'a> Widget for GraphView<'a> {
                 }
             }
         }
+    }
+}
+
+fn render_lane_header(
+    buf: &mut Buf,
+    y: u16,
+    x_start: u16,
+    avail_w: usize,
+    first_visible_row: Option<&GraphRow>,
+    branch_index_to_name: &HashMap<usize, String>,
+    trunk_count: usize,
+) {
+    let header_bg = Style::default().bg(theme::LANE_HEADER_BG);
+    for x in x_start..(x_start + avail_w as u16) {
+        buf[(x, y)].set_style(header_bg);
+    }
+
+    let lane_branches = match first_visible_row {
+        Some(row) => &row.lane_branches,
+        None => return,
+    };
+
+    // Each cell is 2 chars wide; +1 for the selection indicator column
+    let indicator_offset = 1u16;
+
+    // Collect (x_position, name, color) for each labeled lane
+    let mut labels: Vec<(u16, &str, ratatui::style::Color)> = Vec::new();
+    for (col_idx, slot) in lane_branches.iter().enumerate() {
+        if let Some(bi) = slot {
+            if let Some(name) = branch_index_to_name.get(bi) {
+                let x_pos = indicator_offset
+                    + (col_idx.min(u16::MAX as usize / 2) as u16).saturating_mul(2);
+                let color = theme::branch_color_by_identity(*bi, trunk_count);
+                labels.push((x_pos, name, color));
+            }
+        }
+    }
+
+    // Sort by x position so we can avoid overlap
+    labels.sort_by_key(|&(x, _, _)| x);
+
+    let mut next_free_x = 0u16;
+    for (x_pos, name, color) in labels {
+        let abs_x = x_start.saturating_add(x_pos);
+        if abs_x < next_free_x {
+            continue;
+        }
+        let max_chars = (x_start + avail_w as u16).saturating_sub(abs_x) as usize;
+        if max_chars == 0 {
+            break;
+        }
+        let display = truncate_with_ellipsis(name, max_chars);
+        let style = Style::default()
+            .fg(color)
+            .bg(theme::LANE_HEADER_BG)
+            .add_modifier(Modifier::DIM);
+        for (ci, ch) in display.chars().enumerate() {
+            let cx = abs_x + ci as u16;
+            if cx >= x_start + avail_w as u16 {
+                break;
+            }
+            buf[(cx, y)].set_char(ch);
+            buf[(cx, y)].set_style(style);
+        }
+        next_free_x = abs_x + UnicodeWidthStr::width(display.as_str()) as u16 + 1;
     }
 }
 
@@ -108,6 +212,7 @@ fn truncate_with_ellipsis(s: &str, max: usize) -> String {
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_row_line(
     row: &GraphRow,
     selected: bool,
@@ -116,6 +221,7 @@ fn build_row_line(
     avail_width: usize,
     trunk_count: usize,
     is_active: bool,
+    branch_index_to_name: &HashMap<usize, String>,
 ) -> Line<'static> {
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
     let mut text_spans: Vec<Span<'static>> = Vec::new();
@@ -155,7 +261,7 @@ fn build_row_line(
         if highlighted {
             style = style.add_modifier(Modifier::BOLD);
         }
-        graph_spans.push(Span::styled(cell.to_chars(), style));
+        graph_spans.push(Span::styled(cell_glyph(cell), style));
     }
     graph_spans.push(Span::raw(" "));
 
@@ -174,6 +280,7 @@ fn build_row_line(
     // Branch labels (max 2, with [*name] for HEAD)
     let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
     let max_branches = 2;
+    let mut showed_branch_label = false;
     for (i, name) in row.branch_names.iter().enumerate() {
         if i >= max_branches || budget < 4 {
             break;
@@ -193,6 +300,7 @@ fn build_row_line(
             .add_modifier(Modifier::BOLD);
         text_spans.push(Span::styled(formatted, style));
         budget = budget.saturating_sub(w);
+        showed_branch_label = true;
     }
 
     // Overflow indicator
@@ -205,6 +313,25 @@ fn build_row_line(
             Style::default().fg(theme::DIM_TEXT),
         ));
         budget = budget.saturating_sub(w);
+        showed_branch_label = true;
+    }
+
+    // Dim branch annotation at merge/fork points (Phase 3)
+    if !showed_branch_label && (row.is_merge || row.is_fork_point) {
+        if let Some(bi) = row.branch_index {
+            if let Some(name) = branch_index_to_name.get(&bi) {
+                let max_label = budget.min(18);
+                if max_label >= 4 {
+                    let label = truncate_with_ellipsis(name, max_label.saturating_sub(3));
+                    let formatted = format!("[{label}] ");
+                    let w = UnicodeWidthStr::width(formatted.as_str());
+                    let color = theme::branch_color_by_identity(bi, trunk_count);
+                    let style = Style::default().fg(color).add_modifier(Modifier::DIM);
+                    text_spans.push(Span::styled(formatted, style));
+                    budget = budget.saturating_sub(w);
+                }
+            }
+        }
     }
 
     // Commit message

@@ -1,6 +1,6 @@
 use crate::git::types::{CommitSource, Oid};
-use crate::project::Project;
 use crate::graph::branch_assign::strip_remote_prefix;
+use crate::project::Project;
 use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,

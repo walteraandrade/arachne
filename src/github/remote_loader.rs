@@ -24,7 +24,12 @@ pub async fn load_remote_repo_data(
             }
             let remaining = max_commits.saturating_sub(all_commits.len());
             match client
-                .fetch_commits(&fork.owner, &fork.repo, &branch.tip.to_string(), remaining.min(100))
+                .fetch_commits(
+                    &fork.owner,
+                    &fork.repo,
+                    &branch.tip.to_string(),
+                    remaining.min(100),
+                )
                 .await
             {
                 Ok(commits) => {

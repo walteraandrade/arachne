@@ -6,7 +6,6 @@ use crate::error::Result;
 use crate::event::{AppEvent, GitHubData};
 use crate::git::{repo, types::RepoData};
 use crate::graph::{dag::Dag, filter::filter_by_author, layout};
-use tokio::sync::mpsc;
 use crate::project::{self, Project};
 use crate::ui::{
     branch_panel::{self, BranchPanel, DisplayEntry, SectionKey},
@@ -23,6 +22,7 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashSet;
+use tokio::sync::mpsc;
 
 use crate::ui::toast::{Notification, NotifyLevel};
 
@@ -112,8 +112,8 @@ impl App {
                 .unwrap_or_else(|| repo::detect_repo_name(&r));
 
             let dag = Dag::from_repo_data(&repo_data);
-            let rows = layout::compute_layout(&dag, &repo_data, &self.config.trunk_branches);
-            let time_sorted_indices = project::build_time_sorted_indices(&rows);
+            let result = layout::compute_layout(&dag, &repo_data, &self.config.trunk_branches);
+            let time_sorted_indices = project::build_time_sorted_indices(&result.rows);
             let cached_repo_data = Some(repo_data.clone());
 
             let remote_source = data_source::init_github_client(&self.config, &repo_name)
@@ -126,7 +126,9 @@ impl App {
                 active_mode: ViewMode::Local,
                 repo_data,
                 dag,
-                rows,
+                rows: result.rows,
+                branch_index_to_name: result.branch_index_to_name,
+                trunk_count: result.trunk_count,
                 current_branch,
                 scroll_x: 0,
                 last_sync: JUST_NOW.to_string(),
@@ -151,6 +153,11 @@ impl App {
             self.show_forks,
             &self.collapsed_sections,
         );
+        if self.cached_entries.is_empty() {
+            self.branch_selected = 0;
+        } else {
+            self.branch_selected = self.branch_selected.min(self.cached_entries.len() - 1);
+        }
     }
 
     pub fn rebuild_graph(&mut self, project_idx: usize) {
@@ -209,11 +216,14 @@ impl App {
                     proj.rate_limit = data.rate_limit;
                     proj.repo_data.branches.extend(data.branches);
                     proj.dag.merge_remote(data.commits);
-                    proj.rows = layout::compute_layout(
+                    let result = layout::compute_layout(
                         &proj.dag,
                         &proj.repo_data,
                         &self.config.trunk_branches,
                     );
+                    proj.rows = result.rows;
+                    proj.branch_index_to_name = result.branch_index_to_name;
+                    proj.trunk_count = result.trunk_count;
                     proj.time_sorted_indices = project::build_time_sorted_indices(&proj.rows);
                     proj.cached_repo_data = None;
                     proj.last_sync = JUST_NOW.to_string();
@@ -312,7 +322,8 @@ impl App {
                 }
                 Panel::Branches => {
                     if !self.cached_entries.is_empty() && self.branch_selected > 0 {
-                        let mut prev = self.branch_selected - 1;
+                        let mut prev = (self.branch_selected - 1)
+                            .min(self.cached_entries.len().saturating_sub(1));
                         while prev > 0 && self.cached_entries[prev].is_spacer() {
                             prev -= 1;
                         }
@@ -387,7 +398,11 @@ impl App {
                                     let max = self.config.max_commits;
                                     self.loading_remote = true;
                                     tokio::spawn(async move {
-                                        let result = crate::github::remote_loader::load_remote_repo_data(&client, max).await;
+                                        let result =
+                                            crate::github::remote_loader::load_remote_repo_data(
+                                                &client, max,
+                                            )
+                                            .await;
                                         let _ = tx.send(AppEvent::RemoteDataResult {
                                             project_idx: idx,
                                             result,
@@ -544,7 +559,7 @@ impl App {
         let mut body_constraints = vec![
             Constraint::Length(panel_w),
             Constraint::Length(1), // left vsep
-            Constraint::Min(1),   // graph
+            Constraint::Min(1),    // graph
         ];
         if self.show_detail {
             body_constraints.push(Constraint::Length(1)); // right vsep
@@ -603,9 +618,7 @@ impl App {
             commit_count: p.rows.len(),
         });
         let infos: Vec<PaneInfo<'_>> = info.into_iter().collect();
-        let last_sync = proj
-            .map(|p| p.last_sync.as_str())
-            .unwrap_or("never");
+        let last_sync = proj.map(|p| p.last_sync.as_str()).unwrap_or("never");
         let view_mode = proj.map(|p| &p.active_mode);
         let project_count = self.projects.len();
         let header = HeaderBar {
@@ -651,7 +664,7 @@ impl App {
         branch_area: ratatui::layout::Rect,
         graph_area: ratatui::layout::Rect,
     ) {
-        let visible_height = graph_area.height as usize;
+        let visible_height = (graph_area.height as usize).saturating_sub(1); // -1 for lane header
         self.ensure_scroll_bounds(visible_height);
 
         let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
@@ -684,8 +697,9 @@ impl App {
                 selected: self.graph_selected,
                 highlighted_oids: &highlighted,
                 is_active: self.active_panel == Panel::Graph,
-                trunk_count: self.config.trunk_branches.len(),
+                trunk_count: proj.trunk_count,
                 palette: &palette,
+                branch_index_to_name: &proj.branch_index_to_name,
             };
             frame.render_widget(graph_view, graph_area);
         }

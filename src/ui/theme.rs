@@ -26,6 +26,8 @@ pub const ACTIVE_BORDER: Color = Color::Rgb(120, 120, 180);
 
 pub const TRUNK_COLORS: &[Color] = &[Color::LightCyan, Color::LightYellow, Color::LightGreen];
 
+pub const LANE_HEADER_BG: Color = Color::Rgb(28, 28, 42);
+
 pub const SECTION_SEPARATOR: Color = Color::Rgb(60, 60, 80);
 pub const DIM_PREFIX: Color = Color::Rgb(90, 90, 110);
 pub const ERROR_FG: Color = Color::LightRed;

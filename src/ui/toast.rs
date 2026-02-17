@@ -84,10 +84,7 @@ impl<'a> Widget for Toast<'a> {
             first_line.to_string()
         };
 
-        let line = Line::from(Span::styled(
-            truncated,
-            Style::default().fg(color),
-        ));
+        let line = Line::from(Span::styled(truncated, Style::default().fg(color)));
         buf.set_line(inner.x, inner.y, &line, inner.width);
     }
 }
