@@ -1,52 +1,62 @@
-# Omarchy Integration
+# Omarchy integration
 
-Install files live in `install/` and follow the omarchy surface conventions.
+Arachne integrates with [omarchy](https://github.com/nicholasgasior/omarchy)
+as a first-class TUI application. Install files in the `install/`
+directory follow omarchy surface conventions for desktop entries,
+keybindings, status bar modules, and notifications.
 
 ## Surfaces
 
-### Desktop Entry
+### Desktop entry
 
 **File:** `install/applications/arachne.desktop`
 
+The desktop entry uses `omarchy-launch-tui` as the launcher and
+sets `StartupWMClass=org.omarchy.arachne` for window matching.
+
 ```sh
 cp install/applications/arachne.desktop ~/.local/share/applications/
-cp install/applications/icons/arachne.svg ~/.local/share/icons/hicolor/scalable/apps/
+cp install/applications/icons/arachne.svg \
+   ~/.local/share/icons/hicolor/scalable/apps/
 gtk-update-icon-cache ~/.local/share/icons/hicolor/
 ```
 
-### Hyprland Keybinding
+### Hyprland keybinding
 
 **File:** `install/hypr/bindings.conf`
 
-Binds `Super+Shift+G` to launch/focus arachne.
+Binds `Super+Shift+G` to launch or focus arachne via
+`omarchy-launch-or-focus-tui`.
 
 ```sh
 cp install/hypr/bindings.conf ~/.config/hypr/conf.d/arachne.conf
 hyprctl reload
 ```
 
-### Launcher Script
+### Launcher script
 
 **File:** `install/bin/arachne`
 
-Wrapper that finds the cargo-installed binary and execs with passthrough args.
+Wrapper script that locates the cargo-installed binary and execs
+with passthrough args. Also runs `gtk-update-icon-cache` on launch.
 
 ```sh
 cp install/bin/arachne ~/.local/bin/
 ```
 
-### Waybar Module
+### Waybar module
 
 **Files:** `install/waybar/arachne.jsonc`, `install/waybar/arachne.css`
 
-Static launcher button with `󰊢` icon. Click opens/focuses arachne.
+Static launcher button displaying a git icon. Click opens or
+focuses arachne.
 
 ```sh
-# Merge arachne.jsonc into your waybar config modules
-# Include arachne.css in your waybar style
+# merge arachne.jsonc into your waybar config modules
+# include arachne.css in your waybar style
 ```
 
-### Mako Notification Rule
+### Mako notification rule
 
 **File:** `install/mako/arachne`
 
@@ -57,18 +67,31 @@ cp install/mako/arachne ~/.config/mako/criteria.d/
 makoctl reload
 ```
 
-## Signal Allocation
+## Signal allocation
 
 | Signal | Purpose |
 |--------|---------|
-| RTMIN+11 | Waybar arachne module refresh |
+| `RTMIN+11` | Waybar arachne module refresh |
 
-## Quick Install (All Surfaces)
+## Quick install
+
+Copy all surfaces in one go:
 
 ```sh
-cp install/applications/arachne.desktop ~/.local/share/applications/
-cp install/applications/icons/arachne.svg ~/.local/share/icons/hicolor/scalable/apps/
+cp install/applications/arachne.desktop \
+   ~/.local/share/applications/
+cp install/applications/icons/arachne.svg \
+   ~/.local/share/icons/hicolor/scalable/apps/
 cp install/bin/arachne ~/.local/bin/
-cp install/hypr/bindings.conf ~/.config/hypr/conf.d/arachne.conf
+cp install/hypr/bindings.conf \
+   ~/.config/hypr/conf.d/arachne.conf
 cp install/mako/arachne ~/.config/mako/criteria.d/
+```
+
+After copying, reload affected services:
+
+```sh
+gtk-update-icon-cache ~/.local/share/icons/hicolor/
+hyprctl reload
+makoctl reload
 ```

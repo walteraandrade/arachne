@@ -1,1 +1,33 @@
 /target
+
+# editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# AI agent directories
+.agent/
+.agents/
+.claude/agent-memory/
+.claude/skills/
+.cline/
+.commandcode/
+.continue/
+.crush/
+.cursor/
+.factory/
+.goose/
+.kilocode/
+.kiro/
+.mcpjam/
+.neovate/
+.openhands/
+.pi/
+.qoder/
+.qwen/
+.reviews/
+.roo/
+.trae/
+.windsurf/
+.zencoder/
