@@ -2,22 +2,25 @@ use crate::event::AppEvent;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+pub struct FsWatcherHandle {
+    pub _watcher: RecommendedWatcher,
+    pub debounce_task: JoinHandle<()>,
+}
 
 pub fn start_fs_watcher(
     repo_path: &Path,
     pane_idx: usize,
     tx: mpsc::UnboundedSender<AppEvent>,
-) -> notify::Result<RecommendedWatcher> {
+) -> notify::Result<FsWatcherHandle> {
     let git_dir = repo_path.join(".git");
 
+    let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<()>();
+
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        match res {
-            Ok(_) => {
-                let _ = tx.send(AppEvent::FsChanged(pane_idx));
-            }
-            Err(e) => {
-                eprintln!("fs watcher error: {e}");
-            }
+        if res.is_ok() {
+            let _ = raw_tx.send(());
         }
     })?;
 
@@ -35,5 +38,16 @@ pub fn start_fs_watcher(
         let _ = watcher.watch(&packed_refs, RecursiveMode::NonRecursive);
     }
 
-    Ok(watcher)
+    let debounce_task = tokio::spawn(async move {
+        while raw_rx.recv().await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            while raw_rx.try_recv().is_ok() {}
+            let _ = tx.send(AppEvent::FsChanged(pane_idx));
+        }
+    });
+
+    Ok(FsWatcherHandle {
+        _watcher: watcher,
+        debounce_task,
+    })
 }

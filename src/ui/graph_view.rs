@@ -1,5 +1,5 @@
 use crate::git::types::CommitSource;
-use crate::graph::layout::format_time_ago;
+use crate::graph::layout::format_time_short;
 use crate::graph::types::GraphRow;
 use crate::ui::theme;
 use ratatui::{
@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Widget},
+    widgets::Widget,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -17,7 +17,6 @@ pub struct GraphView<'a> {
     pub scroll_x: usize,
     pub selected: usize,
     pub highlighted_oids: &'a std::collections::HashSet<crate::git::types::Oid>,
-    pub repo_name: &'a str,
     pub is_active: bool,
     pub is_first_pane: bool,
     pub trunk_count: usize,
@@ -25,50 +24,30 @@ pub struct GraphView<'a> {
 
 impl<'a> Widget for GraphView<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        if area.height < 2 {
+        if area.height == 0 {
             return;
         }
 
         let area = if !self.is_first_pane {
-            let border = Block::default()
-                .borders(Borders::LEFT)
-                .border_style(Style::default().fg(theme::BORDER_COLOR));
-            let inner = border.inner(area);
-            border.render(area, buf);
-            inner
+            // Vertical separator on left edge for non-first panes
+            let sep_style = Style::default().fg(theme::SEPARATOR);
+            for y in area.y..area.bottom() {
+                buf[(area.x, y)].set_char('\u{2503}');
+                buf[(area.x, y)].set_style(sep_style);
+            }
+            Rect {
+                x: area.x + 1,
+                y: area.y,
+                width: area.width.saturating_sub(1),
+                height: area.height,
+            }
         } else {
             area
         };
 
-        let header_style = if self.is_active {
-            Style::default()
-                .fg(theme::FILTER_COLOR)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::BORDER_COLOR)
-        };
-
-        let header = format!(" {} ", self.repo_name);
-        let header_line = Line::from(Span::styled(header, header_style));
-
-        let header_bg = if self.is_active {
-            Style::default().bg(theme::STATUS_BG)
-        } else {
-            Style::default()
-        };
-        for x in area.x..area.right() {
-            buf[(x, area.y)].set_style(header_bg);
-        }
-        buf.set_line(area.x, area.y, &header_line, area.width);
-
-        let graph_area = Rect {
-            x: area.x,
-            y: area.y + 1,
-            width: area.width,
-            height: area.height - 1,
-        };
-        let visible = graph_area.height as usize;
-        let avail_w = graph_area.width as usize;
+        let visible = area.height as usize;
+        let avail_w = area.width as usize;
+        let sel_bg = if self.is_active { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
 
         for (i, row) in self
             .rows
@@ -77,27 +56,27 @@ impl<'a> Widget for GraphView<'a> {
             .take(visible)
             .enumerate()
         {
-            let y = graph_area.y + i as u16;
-            if y >= graph_area.y + graph_area.height {
+            let y = area.y + i as u16;
+            if y >= area.y + area.height {
                 break;
             }
 
             let abs_idx = self.scroll_y + i;
-            let is_selected = abs_idx == self.selected && self.is_active;
+            let is_selected = abs_idx == self.selected;
             let is_highlighted = self.highlighted_oids.contains(&row.oid);
 
-            let line = build_row_line(row, is_selected, is_highlighted, self.scroll_x, avail_w, self.trunk_count);
+            let line = build_row_line(row, is_selected, is_highlighted, self.scroll_x, avail_w, self.trunk_count, self.is_active);
             let line_width: usize = line
                 .spans
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
 
-            buf.set_line(graph_area.x, y, &line, graph_area.width);
+            buf.set_line(area.x, y, &line, area.width);
 
             if is_selected && line_width < avail_w {
-                let fill_style = Style::default().bg(theme::SELECTED_BG);
-                for x in (graph_area.x + line_width as u16)..graph_area.right() {
+                let fill_style = Style::default().bg(sel_bg);
+                for x in (area.x + line_width as u16)..area.right() {
                     buf[(x, y)].set_style(fill_style);
                 }
             }
@@ -133,12 +112,25 @@ fn build_row_line(
     scroll_x: usize,
     avail_width: usize,
     trunk_count: usize,
+    is_active: bool,
 ) -> Line<'static> {
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
     let mut text_spans: Vec<Span<'static>> = Vec::new();
     let is_fork = matches!(row.source, CommitSource::Fork(_));
+    let sel_bg = if is_active { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
 
-    // 1. Graph cells (fixed, never scrolled)
+    // Selection indicator (▎ at column 0)
+    if selected {
+        let indicator_fg = if is_active { theme::ACTIVE_BORDER } else { theme::DIM_TEXT };
+        graph_spans.push(Span::styled(
+            "\u{258e}",
+            Style::default().fg(indicator_fg).bg(sel_bg),
+        ));
+    } else {
+        graph_spans.push(Span::raw(" "));
+    }
+
+    // Graph cells
     for cell in &row.cells {
         let color = if is_fork {
             theme::FORK_DIM
@@ -147,7 +139,7 @@ fn build_row_line(
         };
         let mut style = Style::default().fg(color);
         if selected {
-            style = style.bg(theme::SELECTED_BG);
+            style = style.bg(sel_bg);
         }
         if highlighted {
             style = style.add_modifier(Modifier::BOLD);
@@ -160,40 +152,55 @@ fn build_row_line(
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
-    let mut budget = avail_width.saturating_sub(graph_width);
 
-    // 2. HEAD marker
-    if row.is_head && budget >= 5 {
-        let style = Style::default()
-            .fg(theme::HEAD_COLOR)
-            .add_modifier(Modifier::BOLD);
-        text_spans.push(Span::styled("HEAD ", style));
-        budget = budget.saturating_sub(5);
-    }
+    // Reserve fixed time column (right-aligned, max 4 chars + 1 space padding)
+    let time_str = format_time_short(&row.time);
+    let time_col_w = 5; // e.g. " 12mo" or "   2h"
+    let mut budget = avail_width.saturating_sub(graph_width).saturating_sub(time_col_w);
 
-    // 3. First branch label (cap 20 chars)
+    // Branch labels (max 2, with [*name] for HEAD)
     let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
-    if let Some(name) = row.branch_names.first() {
-        if budget >= 4 {
-            let max_label = budget.min(20);
-            let label = truncate_with_ellipsis(name, max_label.saturating_sub(3));
-            let formatted = format!("[{label}] ");
-            let w = UnicodeWidthStr::width(formatted.as_str());
-            let style = Style::default()
-                .fg(theme::branch_color_by_identity(commit_color_idx, trunk_count))
-                .add_modifier(Modifier::BOLD);
-            text_spans.push(Span::styled(formatted, style));
-            budget = budget.saturating_sub(w);
+    let mut shown_branches = 0;
+    let max_branches = 2;
+    for (i, name) in row.branch_names.iter().enumerate() {
+        if shown_branches >= max_branches {
+            break;
         }
+        if budget < 4 {
+            break;
+        }
+        let max_label = budget.min(20);
+        let is_head_branch = row.is_head && i == 0;
+        let prefix = if is_head_branch { "*" } else { "" };
+        let display = format!("{prefix}{name}");
+        let label = truncate_with_ellipsis(&display, max_label.saturating_sub(3));
+        let formatted = format!("[{label}] ");
+        let w = UnicodeWidthStr::width(formatted.as_str());
+        let style = Style::default()
+            .fg(theme::branch_color_by_identity(commit_color_idx, trunk_count))
+            .add_modifier(Modifier::BOLD);
+        text_spans.push(Span::styled(formatted, style));
+        budget = budget.saturating_sub(w);
+        shown_branches += 1;
     }
 
-    // 4. Commit message (fill remaining, leave room for time)
-    let time_ago = format_time_ago(&row.time);
-    let time_str = format!(" ({time_ago})");
-    let time_w = UnicodeWidthStr::width(time_str.as_str());
+    // Overflow indicator
+    let overflow = row.branch_names.len().saturating_sub(max_branches);
+    if overflow > 0 && budget >= 5 {
+        let overflow_str = format!("[+{overflow}] ");
+        let w = UnicodeWidthStr::width(overflow_str.as_str());
+        text_spans.push(Span::styled(
+            overflow_str,
+            Style::default().fg(theme::DIM_TEXT),
+        ));
+        budget = budget.saturating_sub(w);
+    }
 
-    let msg_budget = if budget > time_w + 5 {
-        budget - time_w
+    // Commit message
+    let author_str = format!(" {}", row.author);
+    let author_w = UnicodeWidthStr::width(author_str.as_str());
+    let msg_budget = if budget > author_w + 5 {
+        budget - author_w
     } else {
         budget
     };
@@ -202,7 +209,7 @@ fn build_row_line(
         let msg = truncate_with_ellipsis(&row.message, msg_budget);
         let msg_w = UnicodeWidthStr::width(msg.as_str());
         let msg_style = if selected {
-            Style::default().bg(theme::SELECTED_BG)
+            Style::default().bg(sel_bg)
         } else if is_fork {
             Style::default().fg(theme::FORK_DIM)
         } else {
@@ -212,35 +219,20 @@ fn build_row_line(
         budget = budget.saturating_sub(msg_w);
     }
 
-    // 5. Time ago
-    if budget >= time_w {
-        let time_style = if selected {
-            Style::default()
-                .fg(ratatui::style::Color::DarkGray)
-                .bg(theme::SELECTED_BG)
+    // Author (dim)
+    if budget >= author_w && !row.author.is_empty() {
+        let style = if selected {
+            Style::default().fg(theme::DIM_TEXT).bg(sel_bg)
         } else {
-            Style::default().fg(ratatui::style::Color::DarkGray)
+            Style::default().fg(theme::DIM_TEXT)
         };
-        text_spans.push(Span::styled(time_str, time_style));
-        budget = budget.saturating_sub(time_w);
+        text_spans.push(Span::styled(author_str, style));
+        budget = budget.saturating_sub(author_w);
     }
 
-    // 6. Extra branch/tag labels
-    for name in row.branch_names.iter().skip(1) {
-        let formatted = format!("[{name}] ");
-        let w = UnicodeWidthStr::width(formatted.as_str());
-        if budget < w {
-            break;
-        }
-        let style = Style::default()
-            .fg(theme::branch_color_by_identity(commit_color_idx, trunk_count))
-            .add_modifier(Modifier::BOLD);
-        text_spans.push(Span::styled(formatted, style));
-        budget = budget.saturating_sub(w);
-    }
-
+    // Tags without emoji — (name) in TAG_COLOR
     for name in &row.tag_names {
-        let formatted = format!("\u{1f3f7} {name} ");
+        let formatted = format!("({name}) ");
         let w = UnicodeWidthStr::width(formatted.as_str());
         if budget < w {
             break;
@@ -253,13 +245,37 @@ fn build_row_line(
     }
     let _ = budget;
 
-    // Apply scroll_x only to text portion (graph cells stay fixed)
+    // Apply scroll_x only to text portion
     if scroll_x > 0 {
         text_spans = skip_chars_preserving_style(text_spans, scroll_x);
     }
 
     let mut spans = graph_spans;
     spans.extend(text_spans);
+
+    // Right-aligned time column
+    let current_width: usize = spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    if avail_width > current_width + time_str.len() {
+        let padding = avail_width - current_width - time_str.len();
+        if padding > 0 {
+            let pad_style = if selected {
+                Style::default().bg(sel_bg)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(" ".repeat(padding), pad_style));
+        }
+        let time_style = if selected {
+            Style::default().fg(theme::DIM_TEXT).bg(sel_bg)
+        } else {
+            Style::default().fg(theme::DIM_TEXT)
+        };
+        spans.push(Span::styled(time_str, time_style));
+    }
+
     Line::from(spans)
 }
 

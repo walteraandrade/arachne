@@ -8,8 +8,11 @@ use crate::ui::{
     branch_panel::{self, BranchPanel, DisplayEntry, SectionKey},
     detail_panel::DetailPanel,
     graph_view::GraphView,
+    header_bar::{HeaderBar, PaneInfo},
+    help_panel::HelpPanel,
     input::{self, Action, FilterMode},
     status_bar::StatusBar,
+    theme,
 };
 use git2::Repository;
 use ratatui::{
@@ -49,6 +52,7 @@ pub struct App {
     pub branch_selected: usize,
 
     pub show_detail: bool,
+    pub show_help: bool,
     pub show_forks: bool,
     pub filter_mode: FilterMode,
     pub filter_text: String,
@@ -70,6 +74,7 @@ impl App {
             branch_scroll: 0,
             branch_selected: 0,
             show_detail: false,
+            show_help: false,
             show_forks: true,
             filter_mode: FilterMode::Off,
             filter_text: String::new(),
@@ -84,7 +89,7 @@ impl App {
         for entry in &entries {
             let path = expand_tilde(&entry.path);
             let r = repo::open_repo(&path)?;
-            let repo_data = repo::read_repo(&r)?;
+            let repo_data = repo::read_repo(&r, self.config.max_commits)?;
 
             let current_branch = repo_data
                 .branches
@@ -123,7 +128,7 @@ impl App {
     pub fn rebuild_graph(&mut self, pane_idx: usize) {
         if let Some(pane) = self.panes.get_mut(pane_idx) {
             if let Some(ref r) = pane.repo {
-                if let Ok(mut data) = repo::read_repo(r) {
+                if let Ok(mut data) = repo::read_repo(r, self.config.max_commits) {
                     pane.current_branch = data
                         .branches
                         .iter()
@@ -196,7 +201,13 @@ impl App {
                         &self.collapsed_sections,
                     );
                     if !entries.is_empty() {
-                        self.branch_selected = (self.branch_selected + 1).min(entries.len() - 1);
+                        let mut next = self.branch_selected + 1;
+                        while next < entries.len() && entries[next].is_spacer() {
+                            next += 1;
+                        }
+                        if next < entries.len() {
+                            self.branch_selected = next;
+                        }
                     }
                 }
             },
@@ -208,7 +219,21 @@ impl App {
                     }
                 }
                 Panel::Branches => {
-                    self.branch_selected = self.branch_selected.saturating_sub(1);
+                    let entries = branch_panel::build_entries(
+                        &self.panes,
+                        &self.filter_text,
+                        self.show_forks,
+                        &self.collapsed_sections,
+                    );
+                    if self.branch_selected > 0 {
+                        let mut prev = self.branch_selected - 1;
+                        while prev > 0 && entries[prev].is_spacer() {
+                            prev -= 1;
+                        }
+                        if !entries[prev].is_spacer() {
+                            self.branch_selected = prev;
+                        }
+                    }
                 }
             },
             Action::ScrollLeft => {
@@ -290,7 +315,11 @@ impl App {
                     self.rebuild_graph(idx);
                 }
             }
-            Action::ClosePopup => self.show_detail = false,
+            Action::Help => self.show_help = !self.show_help,
+            Action::ClosePopup => {
+                self.show_detail = false;
+                self.show_help = false;
+            }
             Action::None => {}
         }
     }
@@ -317,6 +346,12 @@ impl App {
                 } else {
                     self.collapsed_sections.insert(key.clone());
                 }
+            } else if let Some(tip) = entry.tip_oid() {
+                if let Some(pane) = self.panes.get(self.active_pane) {
+                    if let Some(idx) = pane.rows.iter().position(|r| r.oid == tip) {
+                        self.graph_selected = idx;
+                    }
+                }
             }
         }
     }
@@ -325,38 +360,74 @@ impl App {
         // Time-sync is handled during render via scroll_y_for_pane
     }
 
-    fn scroll_y_for_pane(&self, pane_idx: usize, visible_height: usize) -> usize {
+    fn pane_sync_info(&self, pane_idx: usize, visible_height: usize) -> (usize, usize) {
         if pane_idx == self.active_pane {
-            return self.graph_scroll_y;
+            return (self.graph_scroll_y, self.graph_selected);
         }
 
-        let active = match self.panes.get(self.active_pane) {
-            Some(p) => p,
-            None => return 0,
-        };
-        let target = match self.panes.get(pane_idx) {
-            Some(p) => p,
-            None => return 0,
+        let anchor_time = self
+            .panes
+            .get(self.active_pane)
+            .and_then(|p| p.rows.get(self.graph_selected))
+            .map(|r| r.time);
+
+        let anchor_time = match anchor_time {
+            Some(t) => t,
+            None => return (0, 0),
         };
 
-        let anchor_time = match active.rows.get(self.graph_selected) {
-            Some(row) => row.time,
-            None => return 0,
+        let target = match self.panes.get(pane_idx) {
+            Some(p) => p,
+            None => return (0, 0),
         };
 
         let closest_idx = find_closest_by_time(&target.rows, anchor_time);
-
-        closest_idx.saturating_sub(visible_height / 2)
+        let scroll_y = closest_idx.saturating_sub(visible_height / 2);
+        (scroll_y, closest_idx)
     }
 
     pub fn render(&mut self, frame: &mut Frame) {
         let size = frame.area();
 
-        let main_chunks = Layout::default()
+        // Vertical: header(1) + separator(1) + body(min) + status(1)
+        let vert = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(1), // header bar
+                Constraint::Length(1), // horizontal separator
+                Constraint::Min(1),    // body
+                Constraint::Length(1), // status bar
+            ])
             .split(size);
 
+        let header_area = vert[0];
+        let hsep_area = vert[1];
+        let body_area = vert[2];
+        let status_area = vert[3];
+
+        // Header bar
+        {
+            let pane_infos: Vec<PaneInfo<'_>> = self
+                .panes
+                .iter()
+                .enumerate()
+                .map(|(i, p)| PaneInfo {
+                    name: &p.repo_name,
+                    branch: &p.current_branch,
+                    is_active: i == self.active_pane,
+                })
+                .collect();
+            let last_sync = self.panes.get(self.active_pane)
+                .map(|p| p.last_sync.as_str())
+                .unwrap_or("never");
+            let header = HeaderBar {
+                panes: &pane_infos,
+                last_sync,
+            };
+            frame.render_widget(header, header_area);
+        }
+
+        // Build entries for branch panel width calculation
         let entries = branch_panel::build_entries(
             &self.panes,
             &self.filter_text,
@@ -367,17 +438,52 @@ impl App {
         let term_w = size.width as usize;
         let panel_w = (max_w + 2).clamp(20, term_w / 3) as u16;
 
+        // Horizontal body: branch_panel | separator(1) | graph_area
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(panel_w), Constraint::Min(1)])
-            .split(main_chunks[0]);
+            .constraints([
+                Constraint::Length(panel_w),
+                Constraint::Length(1), // vertical separator
+                Constraint::Min(1),
+            ])
+            .split(body_area);
 
-        let graph_area = body_chunks[1];
+        let branch_area = body_chunks[0];
+        let vsep_area = body_chunks[1];
+        let graph_area = body_chunks[2];
+
+        // Horizontal separator across full width
+        let sep_style = ratatui::style::Style::default().fg(theme::SEPARATOR);
+        for x in hsep_area.x..hsep_area.right() {
+            frame.buffer_mut()[(x, hsep_area.y)].set_char('\u{2500}');
+            frame.buffer_mut()[(x, hsep_area.y)].set_style(sep_style);
+        }
+        // Cross junction at vertical separator position
+        if vsep_area.x > hsep_area.x && vsep_area.x < hsep_area.right() {
+            frame.buffer_mut()[(vsep_area.x, hsep_area.y)].set_char('\u{253c}');
+        }
+
+        // Vertical separator
+        for y in vsep_area.y..vsep_area.bottom() {
+            frame.buffer_mut()[(vsep_area.x, y)].set_char('\u{2503}');
+            frame.buffer_mut()[(vsep_area.x, y)].set_style(sep_style);
+        }
+
         let visible_height = graph_area.height as usize;
-
         self.ensure_scroll_bounds(visible_height);
 
         let highlighted: HashSet<_> = self.get_highlighted_oids(&entries);
+
+        // Branch panel scroll
+        let branch_visible = branch_area.height.saturating_sub(2) as usize;
+        if branch_visible > 0 {
+            if self.branch_selected >= self.branch_scroll + branch_visible {
+                self.branch_scroll = self.branch_selected - branch_visible + 1;
+            }
+            if self.branch_selected < self.branch_scroll {
+                self.branch_scroll = self.branch_selected;
+            }
+        }
 
         let branch_panel = BranchPanel {
             entries: &entries,
@@ -385,8 +491,9 @@ impl App {
             scroll: self.branch_scroll,
             focused: self.active_panel == Panel::Branches,
         };
-        frame.render_widget(branch_panel, body_chunks[0]);
+        frame.render_widget(branch_panel, branch_area);
 
+        // Graph panes
         let weights: Vec<u32> = self
             .panes
             .iter()
@@ -402,21 +509,11 @@ impl App {
             .constraints(constraints)
             .split(graph_area);
 
+        let graph_focused = self.active_panel == Panel::Graph;
         for (idx, pane) in self.panes.iter().enumerate() {
-            let is_active = idx == self.active_pane;
-            let pane_scroll_y = self.scroll_y_for_pane(idx, visible_height.saturating_sub(1));
-            let selected = if is_active {
-                self.graph_selected
-            } else {
-                find_closest_by_time(
-                    &pane.rows,
-                    self.panes
-                        .get(self.active_pane)
-                        .and_then(|p| p.rows.get(self.graph_selected))
-                        .map(|r| r.time)
-                        .unwrap_or_default(),
-                )
-            };
+            let is_active_pane = idx == self.active_pane;
+            let (pane_scroll_y, selected) =
+                self.pane_sync_info(idx, visible_height);
 
             let graph_view = GraphView {
                 rows: &pane.rows,
@@ -424,32 +521,23 @@ impl App {
                 scroll_x: pane.scroll_x,
                 selected,
                 highlighted_oids: &highlighted,
-                repo_name: &pane.repo_name,
-                is_active,
+                is_active: is_active_pane && graph_focused,
                 is_first_pane: idx == 0,
                 trunk_count: self.config.trunk_branches.len(),
             };
             frame.render_widget(graph_view, pane_chunks[idx]);
         }
 
-        let pane_names: Vec<(&str, bool)> = self
-            .panes
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.repo_name.as_str(), i == self.active_pane))
-            .collect();
-
+        // Status bar
         let active = self.panes.get(self.active_pane);
         let status = StatusBar {
-            pane_tabs: &pane_names,
             branch_name: active.map(|p| p.current_branch.as_str()).unwrap_or(""),
             last_sync: active.map(|p| p.last_sync.as_str()).unwrap_or("never"),
-            rate_limit: active.and_then(|p| p.rate_limit),
             filter_mode: self.filter_mode,
             filter_text: &self.filter_text,
             author_filter_text: &self.author_filter_text,
         };
-        frame.render_widget(status, main_chunks[1]);
+        frame.render_widget(status, status_area);
 
         if self.show_detail {
             if let Some(pane) = self.panes.get(self.active_pane) {
@@ -458,6 +546,10 @@ impl App {
                     frame.render_widget(detail, size);
                 }
             }
+        }
+
+        if self.show_help {
+            frame.render_widget(HelpPanel, size);
         }
     }
 
@@ -529,24 +621,36 @@ fn expand_tilde(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn filter_by_author(data: &mut RepoData, author_query: &str) {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
 
     let query = author_query.to_lowercase();
     let commit_map: HashMap<_, _> = data.commits.iter().map(|c| (c.oid, c)).collect();
 
+    // Step 1: matching commits by author substring
+    let matching: HashSet<crate::git::types::Oid> = data
+        .commits
+        .iter()
+        .filter(|c| c.author.to_lowercase().contains(&query))
+        .map(|c| c.oid)
+        .collect();
+
+    // Step 2: branches reachable to at least one match via full BFS (all parents)
     let matching_branches: Vec<_> = data
         .branches
         .iter()
         .filter(|branch| {
-            let mut current = Some(&branch.tip);
-            while let Some(oid) = current {
-                if let Some(commit) = commit_map.get(oid) {
-                    if commit.author.to_lowercase().contains(&query) {
-                        return true;
-                    }
-                    current = commit.parents.first();
-                } else {
-                    break;
+            let mut visited = HashSet::new();
+            let mut queue = VecDeque::new();
+            queue.push_back(branch.tip);
+            while let Some(oid) = queue.pop_front() {
+                if !visited.insert(oid) {
+                    continue;
+                }
+                if matching.contains(&oid) {
+                    return true;
+                }
+                if let Some(commit) = commit_map.get(&oid) {
+                    queue.extend(commit.parents.iter().copied());
                 }
             }
             false
@@ -554,21 +658,70 @@ fn filter_by_author(data: &mut RepoData, author_query: &str) {
         .cloned()
         .collect();
 
-    let mut reachable: HashSet<crate::git::types::Oid> = HashSet::new();
-    for branch in &matching_branches {
-        let mut stack = vec![branch.tip];
-        while let Some(oid) = stack.pop() {
-            if !reachable.insert(oid) {
-                continue;
+    // Step 3: skip cache — for each non-matching commit, its nearest matching ancestors.
+    // Process in reverse topo order (parents before children) so deps are ready.
+    let mut skip_cache: HashMap<crate::git::types::Oid, Vec<crate::git::types::Oid>> =
+        HashMap::new();
+    for commit in data.commits.iter().rev() {
+        if matching.contains(&commit.oid) {
+            skip_cache.insert(commit.oid, vec![commit.oid]);
+        } else {
+            let mut ancestors = Vec::new();
+            let mut seen = HashSet::new();
+            for &parent in &commit.parents {
+                if let Some(parent_ancestors) = skip_cache.get(&parent) {
+                    for &a in parent_ancestors {
+                        if seen.insert(a) {
+                            ancestors.push(a);
+                        }
+                    }
+                }
             }
-            if let Some(commit) = commit_map.get(&oid) {
-                stack.extend(commit.parents.iter().copied());
-            }
+            skip_cache.insert(commit.oid, ancestors);
         }
     }
 
-    data.branches = matching_branches;
-    data.commits.retain(|c| reachable.contains(&c.oid));
+    // Step 4: rewrite parents on matching commits — skip over filtered-out commits
+    for commit in &mut data.commits {
+        if !matching.contains(&commit.oid) {
+            continue;
+        }
+        let mut new_parents = Vec::new();
+        let mut seen = HashSet::new();
+        for &parent in &commit.parents {
+            if matching.contains(&parent) {
+                if seen.insert(parent) {
+                    new_parents.push(parent);
+                }
+            } else if let Some(ancestors) = skip_cache.get(&parent) {
+                for &a in ancestors {
+                    if seen.insert(a) {
+                        new_parents.push(a);
+                    }
+                }
+            }
+        }
+        commit.parents = new_parents;
+    }
+
+    // Step 5: retain only matching commits
+    data.commits.retain(|c| matching.contains(&c.oid));
+
+    // Step 6: retarget branch tips to nearest matching commit
+    data.branches = matching_branches
+        .into_iter()
+        .filter_map(|mut branch| {
+            if matching.contains(&branch.tip) {
+                Some(branch)
+            } else {
+                let ancestors = skip_cache.get(&branch.tip)?;
+                branch.tip = *ancestors.first()?;
+                Some(branch)
+            }
+        })
+        .collect();
+
+    // Step 7: rebuild branch_tips
     data.branch_tips = data.branches.iter().map(|b| b.tip).collect();
 }
 

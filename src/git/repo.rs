@@ -9,14 +9,14 @@ pub fn open_repo(path: &Path) -> Result<Repository> {
     Repository::discover(path).map_err(|_| ArachneError::NotARepo(path.display().to_string()))
 }
 
-pub fn read_repo(repo: &Repository) -> Result<RepoData> {
+pub fn read_repo(repo: &Repository, max_commits: usize) -> Result<RepoData> {
     let mut data = RepoData::default();
 
     data.branches = list_branches(repo)?;
     data.tags = list_tags(repo)?;
     data.head = resolve_head(repo);
     data.branch_tips = data.branches.iter().map(|b| b.tip).collect();
-    data.commits = topo_walk(repo)?;
+    data.commits = topo_walk(repo, max_commits)?;
 
     Ok(data)
 }
@@ -90,7 +90,7 @@ fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
     Ok(out)
 }
 
-fn topo_walk(repo: &Repository) -> Result<Vec<CommitInfo>> {
+fn topo_walk(repo: &Repository, max_commits: usize) -> Result<Vec<CommitInfo>> {
     let mut revwalk = repo.revwalk()?;
     revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
 
@@ -118,6 +118,9 @@ fn topo_walk(repo: &Repository) -> Result<Vec<CommitInfo>> {
 
     let mut commits = Vec::new();
     for oid_result in revwalk {
+        if max_commits > 0 && commits.len() >= max_commits {
+            break;
+        }
         let oid = oid_result?;
         let commit = repo.find_commit(oid)?;
         let time_secs = commit.time().seconds();

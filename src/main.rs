@@ -18,8 +18,8 @@ use crossterm::{
 };
 use event::{AppEvent, GitHubData};
 use futures::StreamExt;
-use notify::RecommendedWatcher;
 use std::collections::HashSet;
+use watcher::fs::FsWatcherHandle;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -60,7 +60,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
 
-    let mut _watchers: Vec<RecommendedWatcher> = Vec::new();
+    let mut watchers: Vec<FsWatcherHandle> = Vec::new();
     let mut poller_handles: Vec<JoinHandle<()>> = Vec::new();
 
     for (idx, pane) in app.panes.iter().enumerate() {
@@ -68,7 +68,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             if let Some(workdir) = r.workdir() {
                 let repo_path = workdir.to_path_buf();
                 if let Ok(w) = watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
-                    _watchers.push(w);
+                    watchers.push(w);
                 }
             }
         }
@@ -121,7 +121,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Abort pollers
+    for w in &watchers {
+        w.debounce_task.abort();
+    }
     for handle in poller_handles {
         handle.abort();
     }

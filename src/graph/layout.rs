@@ -235,6 +235,25 @@ pub fn format_time_ago(time: &chrono::DateTime<chrono::Utc>) -> String {
     format!("{}y ago", dur.num_days() / 365)
 }
 
+pub fn format_time_short(time: &chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let dur = now.signed_duration_since(*time);
+
+    if dur.num_seconds() < 60 {
+        format!("{}s", dur.num_seconds())
+    } else if dur.num_minutes() < 60 {
+        format!("{}m", dur.num_minutes())
+    } else if dur.num_hours() < 24 {
+        format!("{}h", dur.num_hours())
+    } else if dur.num_days() < 30 {
+        format!("{}d", dur.num_days())
+    } else if dur.num_days() < 365 {
+        format!("{}mo", dur.num_days() / 30)
+    } else {
+        format!("{}y", dur.num_days() / 365)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

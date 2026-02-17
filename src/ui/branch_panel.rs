@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Widget},
+    widgets::Widget,
 };
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
@@ -23,6 +23,7 @@ pub enum SectionKey {
 pub enum EntryKind {
     RepoHeader,
     SectionHeader(SectionKey),
+    Spacer,
     LocalBranch { is_head: bool, tip: Oid },
     RemoteBranch { tip: Oid },
     ForkBranch { tip: Oid },
@@ -55,6 +56,10 @@ impl DisplayEntry {
     pub fn is_header(&self) -> bool {
         matches!(self.kind, EntryKind::SectionHeader(_) | EntryKind::RepoHeader)
     }
+
+    pub fn is_spacer(&self) -> bool {
+        matches!(self.kind, EntryKind::Spacer)
+    }
 }
 
 pub struct BranchPanel<'a> {
@@ -66,33 +71,48 @@ pub struct BranchPanel<'a> {
 
 impl<'a> Widget for BranchPanel<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        let border_style = if self.focused {
-            Style::default().fg(theme::FILTER_COLOR)
-        } else {
-            Style::default().fg(theme::BORDER_COLOR)
-        };
+        if area.height < 2 {
+            return;
+        }
 
-        let block = Block::default()
-            .title(" Branches ")
-            .borders(Borders::ALL)
-            .border_style(border_style);
-        let inner = block.inner(area);
-        block.render(area, buf);
+        // Header line: "Branches"
+        let header_fg = if self.focused { theme::ACCENT } else { theme::PANEL_LABEL };
+        let header_style = Style::default()
+            .fg(header_fg)
+            .bg(theme::HEADER_BG)
+            .add_modifier(Modifier::BOLD);
+        for x in area.x..area.right() {
+            buf[(x, area.y)].set_style(Style::default().bg(theme::HEADER_BG));
+        }
+        buf.set_line(area.x, area.y, &Line::from(Span::styled("Branches", header_style)), area.width);
 
-        let inner_w = inner.width as usize;
-        let visible = inner.height as usize;
+        // Horizontal separator
+        if area.height < 3 {
+            return;
+        }
+        let sep_style = Style::default().fg(theme::SEPARATOR);
+        for x in area.x..area.right() {
+            buf[(x, area.y + 1)].set_char('\u{2500}');
+            buf[(x, area.y + 1)].set_style(sep_style);
+        }
+
+        let inner_y = area.y + 2;
+        let inner_w = area.width as usize;
+        let visible = (area.height.saturating_sub(2)) as usize;
+
+        let sel_bg = if self.focused { theme::SELECTED_BG } else { theme::UNFOCUSED_SEL_BG };
 
         for (i, entry) in self.entries.iter().skip(self.scroll).take(visible).enumerate() {
-            let y = inner.y + i as u16;
+            let y = inner_y + i as u16;
             let abs_idx = self.scroll + i;
             let is_selected = abs_idx == self.selected;
 
-            let line = entry_line(entry, is_selected, inner_w);
-            buf.set_line(inner.x, y, &line, inner.width);
+            let line = entry_line(entry, is_selected, inner_w, self.focused);
+            buf.set_line(area.x, y, &line, area.width);
 
             if is_selected {
-                for x in inner.x..(inner.x + inner.width) {
-                    buf[(x, y)].set_style(Style::default().bg(theme::SELECTED_BG));
+                for x in area.x..(area.x + area.width) {
+                    buf[(x, y)].set_style(Style::default().bg(sel_bg));
                 }
             }
         }
@@ -106,12 +126,15 @@ pub fn build_entries(
     collapsed: &HashSet<SectionKey>,
 ) -> Vec<DisplayEntry> {
     let mut entries = Vec::new();
+    let single_pane = panes.len() == 1;
 
     for (pane_idx, pane) in panes.iter().enumerate() {
-        entries.push(DisplayEntry {
-            label: pane.repo_name.clone(),
-            kind: EntryKind::RepoHeader,
-        });
+        if !single_pane {
+            entries.push(DisplayEntry {
+                label: pane.repo_name.clone(),
+                kind: EntryKind::RepoHeader,
+            });
+        }
 
         let branches = &pane.repo_data.branches;
         let tags = &pane.repo_data.tags;
@@ -122,15 +145,13 @@ pub fn build_entries(
             .filter(|b| filter.is_empty() || b.name.contains(filter))
             .collect();
 
-        if !local.is_empty() {
+        let has_local = !local.is_empty();
+        if has_local {
             let key = SectionKey::Local(pane_idx);
             let is_collapsed = collapsed.contains(&key);
+            let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             entries.push(DisplayEntry {
-                label: if is_collapsed {
-                    format!("  Local ({}) \u{25b6}", local.len())
-                } else {
-                    format!("  Local ({}) \u{25bc}", local.len())
-                },
+                label: format!("  {arrow} Local ({})", local.len()),
                 kind: EntryKind::SectionHeader(key),
             });
             if !is_collapsed {
@@ -154,20 +175,21 @@ pub fn build_entries(
             .collect();
 
         if !remote.is_empty() {
+            if has_local {
+                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
+            }
             let key = SectionKey::Remote(pane_idx);
             let is_collapsed = collapsed.contains(&key);
+            let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             entries.push(DisplayEntry {
-                label: if is_collapsed {
-                    format!("  Remote ({}) \u{25b6}", remote.len())
-                } else {
-                    format!("  Remote ({}) \u{25bc}", remote.len())
-                },
+                label: format!("  {arrow} Remote ({})", remote.len()),
                 kind: EntryKind::SectionHeader(key),
             });
             if !is_collapsed {
                 for b in remote {
+                    let display_name = b.name.strip_prefix("origin/").unwrap_or(&b.name);
                     entries.push(DisplayEntry {
-                        label: format!("      {}", b.name),
+                        label: format!("    {display_name}"),
                         kind: EntryKind::RemoteBranch { tip: b.tip },
                     });
                 }
@@ -182,6 +204,7 @@ pub fn build_entries(
                 .collect();
 
             if !forks.is_empty() {
+                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
                 let mut current_fork = String::new();
                 for b in &forks {
                     if let CommitSource::Fork(ref owner) = b.source {
@@ -193,19 +216,16 @@ pub fn build_entries(
                                 .filter(|fb| matches!(&fb.source, CommitSource::Fork(o) if o == owner))
                                 .count();
                             let is_collapsed = collapsed.contains(&key);
+                            let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
                             entries.push(DisplayEntry {
-                                label: if is_collapsed {
-                                    format!("  Fork: {owner} ({fork_count}) \u{25b6}")
-                                } else {
-                                    format!("  Fork: {owner} ({fork_count}) \u{25bc}")
-                                },
+                                label: format!("  {arrow} Fork: {owner} ({fork_count})"),
                                 kind: EntryKind::SectionHeader(key),
                             });
                             if !is_collapsed {
                                 for fb in &forks {
                                     if matches!(&fb.source, CommitSource::Fork(o) if o == owner) {
                                         entries.push(DisplayEntry {
-                                            label: format!("      {}", fb.name),
+                                            label: format!("    {}", fb.name),
                                             kind: EntryKind::ForkBranch { tip: fb.tip },
                                         });
                                     }
@@ -223,20 +243,20 @@ pub fn build_entries(
             .collect();
 
         if !filtered_tags.is_empty() {
+            if !entries.is_empty() && !matches!(entries.last().map(|e| &e.kind), Some(EntryKind::Spacer | EntryKind::RepoHeader)) {
+                entries.push(DisplayEntry { label: String::new(), kind: EntryKind::Spacer });
+            }
             let key = SectionKey::Tags(pane_idx);
             let is_collapsed = collapsed.contains(&key);
+            let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             entries.push(DisplayEntry {
-                label: if is_collapsed {
-                    format!("  Tags ({}) \u{25b6}", filtered_tags.len())
-                } else {
-                    format!("  Tags ({}) \u{25bc}", filtered_tags.len())
-                },
+                label: format!("  {arrow} Tags ({})", filtered_tags.len()),
                 kind: EntryKind::SectionHeader(key),
             });
             if !is_collapsed {
                 for t in filtered_tags {
                     entries.push(DisplayEntry {
-                        label: format!("    \u{1f3f7} {}", t.name),
+                        label: format!("    ({})", t.name),
                         kind: EntryKind::Tag { target: t.target },
                     });
                 }
@@ -272,7 +292,7 @@ pub fn auto_collapse_defaults(panes: &[RepoPane], filter: &str) -> HashSet<Secti
     set
 }
 
-fn truncate_left(s: &str, max_width: usize) -> String {
+fn truncate_right(s: &str, max_width: usize) -> String {
     let w = UnicodeWidthStr::width(s);
     if w <= max_width {
         return s.to_string();
@@ -282,42 +302,163 @@ fn truncate_left(s: &str, max_width: usize) -> String {
     }
     let target = max_width - 1;
     let mut total_w = 0;
-    let mut split_byte = s.len();
-    for (byte_idx, ch) in s.char_indices().rev() {
+    let mut end_byte = 0;
+    for (byte_idx, ch) in s.char_indices() {
         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
         if total_w + cw > target {
             break;
         }
         total_w += cw;
-        split_byte = byte_idx;
+        end_byte = byte_idx + ch.len_utf8();
     }
-    format!("\u{2026}{}", &s[split_byte..])
+    format!("{}\u{2026}", &s[..end_byte])
 }
 
-fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize) -> Line<'static> {
+fn section_header_line(label: &str, count: usize, selected: bool, width: usize) -> Line<'static> {
+    let bold_style = if selected {
+        Style::default()
+            .fg(ratatui::style::Color::White)
+            .bg(theme::SELECTED_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(ratatui::style::Color::White)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let dim_style = if selected {
+        Style::default().fg(theme::DIM_TEXT).bg(theme::SELECTED_BG)
+    } else {
+        Style::default().fg(theme::DIM_TEXT)
+    };
+
+    let sep_style = if selected {
+        Style::default().fg(theme::SECTION_SEPARATOR).bg(theme::SELECTED_BG)
+    } else {
+        Style::default().fg(theme::SECTION_SEPARATOR)
+    };
+
+    let text_part = format!("{label} ({count})");
+    let text_w = UnicodeWidthStr::width(text_part.as_str());
+    let fill_len = width.saturating_sub(text_w + 1);
+    let fill: String = "\u{2500}".repeat(fill_len);
+
+    Line::from(vec![
+        Span::styled(label.to_string(), bold_style),
+        Span::styled(format!(" ({count}) "), dim_style),
+        Span::styled(fill, sep_style),
+    ])
+}
+
+fn split_branch_prefix(name: &str) -> Option<(&str, &str)> {
+    let slash = name.find('/')?;
+    let prefix = &name[..=slash];
+    let rest = &name[slash + 1..];
+    if rest.is_empty() { None } else { Some((prefix, rest)) }
+}
+
+fn entry_line(entry: &DisplayEntry, selected: bool, max_width: usize, _focused: bool) -> Line<'static> {
+    if matches!(entry.kind, EntryKind::Spacer) {
+        return Line::from("");
+    }
+
+    // Section headers: parse count from label and render with dim count + separator
+    if let EntryKind::SectionHeader(_) = &entry.kind {
+        if let Some(paren_start) = entry.label.rfind('(') {
+            if let Some(paren_end) = entry.label.rfind(')') {
+                if let Ok(count) = entry.label[paren_start + 1..paren_end].parse::<usize>() {
+                    let base = entry.label[..paren_start].trim_end();
+                    return section_header_line(base, count, selected, max_width);
+                }
+            }
+        }
+        let style = if selected {
+            Style::default()
+                .fg(ratatui::style::Color::White)
+                .bg(theme::SELECTED_BG)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(ratatui::style::Color::White)
+                .add_modifier(Modifier::BOLD)
+        };
+        return Line::from(Span::styled(entry.label.clone(), style));
+    }
+
+    // Two-tone branch names for branch entries
+    let is_branch = matches!(
+        entry.kind,
+        EntryKind::LocalBranch { is_head: false, .. }
+            | EntryKind::RemoteBranch { .. }
+            | EntryKind::ForkBranch { .. }
+    );
+
+    if is_branch {
+        let label = if max_width > 0 {
+            truncate_right(&entry.label, max_width)
+        } else {
+            entry.label.clone()
+        };
+
+        let trimmed = label.trim_start();
+        let indent = &label[..label.len() - trimmed.len()];
+
+        let base_color = if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
+            theme::FORK_DIM
+        } else {
+            theme::branch_prefix_color(trimmed)
+        };
+
+        let bg = if selected { Some(theme::SELECTED_BG) } else { None };
+
+        let mut indent_style = Style::default();
+        if let Some(b) = bg { indent_style = indent_style.bg(b); }
+
+        if let Some((prefix, rest)) = split_branch_prefix(trimmed) {
+            let mut prefix_style = Style::default().fg(theme::DIM_PREFIX);
+            let mut name_style = Style::default().fg(base_color);
+            if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
+                prefix_style = prefix_style.add_modifier(Modifier::ITALIC);
+                name_style = name_style.add_modifier(Modifier::ITALIC);
+            }
+            if let Some(b) = bg {
+                prefix_style = prefix_style.bg(b);
+                name_style = name_style.bg(b);
+            }
+            return Line::from(vec![
+                Span::styled(indent.to_string(), indent_style),
+                Span::styled(prefix.to_string(), prefix_style),
+                Span::styled(rest.to_string(), name_style),
+            ]);
+        }
+
+        let mut style = Style::default().fg(base_color);
+        if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        if let Some(b) = bg { style = style.bg(b); }
+        return Line::from(vec![
+            Span::styled(indent.to_string(), indent_style),
+            Span::styled(trimmed.to_string(), style),
+        ]);
+    }
+
+    // HEAD branch, repo header, tags — single style
     let style = match &entry.kind {
         EntryKind::RepoHeader => Style::default()
-            .fg(theme::FILTER_COLOR)
+            .fg(theme::ACTIVE_BORDER)
             .add_modifier(Modifier::BOLD),
-        EntryKind::SectionHeader(_) => Style::default()
-            .fg(ratatui::style::Color::White)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         EntryKind::LocalBranch { is_head: true, .. } => Style::default()
             .fg(theme::HEAD_COLOR)
             .add_modifier(Modifier::BOLD),
         EntryKind::Tag { .. } => Style::default().fg(theme::TAG_COLOR),
-        EntryKind::ForkBranch { .. } => Style::default().fg(theme::FORK_DIM),
         _ => Style::default(),
     };
 
-    let style = if selected {
-        style.bg(theme::SELECTED_BG)
-    } else {
-        style
-    };
+    let style = if selected { style.bg(theme::SELECTED_BG) } else { style };
 
     let label = if !entry.is_header() && max_width > 0 {
-        truncate_left(&entry.label, max_width)
+        truncate_right(&entry.label, max_width)
     } else {
         entry.label.clone()
     };

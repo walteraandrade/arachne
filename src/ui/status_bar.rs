@@ -7,12 +7,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::Widget,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub struct StatusBar<'a> {
-    pub pane_tabs: &'a [(&'a str, bool)],
     pub branch_name: &'a str,
     pub last_sync: &'a str,
-    pub rate_limit: Option<u32>,
     pub filter_mode: FilterMode,
     pub filter_text: &'a str,
     pub author_filter_text: &'a str,
@@ -54,44 +53,25 @@ impl<'a> Widget for StatusBar<'a> {
             return;
         }
 
-        let mut spans = Vec::new();
+        let mut left_spans = Vec::new();
 
-        spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
-        for (name, is_active) in self.pane_tabs {
-            let style = if *is_active {
-                Style::default()
-                    .fg(theme::FILTER_COLOR)
-                    .bg(theme::STATUS_BG)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(theme::BORDER_COLOR)
-                    .bg(theme::STATUS_BG)
-            };
-            let short = name.rsplit('/').next().unwrap_or(name);
-            spans.push(Span::styled(format!("[{short}]"), style));
-            spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
-        }
+        left_spans.push(Span::styled(" ", Style::default().bg(theme::STATUS_BG)));
 
-        spans.push(Span::styled(
-            "\u{2502}",
-            Style::default()
-                .fg(theme::BORDER_COLOR)
-                .bg(theme::STATUS_BG),
-        ));
-        spans.push(Span::styled(
-            format!(" {} ", self.branch_name),
+        // Branch name
+        left_spans.push(Span::styled(
+            format!("{} ", self.branch_name),
             Style::default().bg(theme::STATUS_BG),
         ));
 
+        // Author filter (if active)
         if !self.author_filter_text.is_empty() {
-            spans.push(Span::styled(
+            left_spans.push(Span::styled(
                 "\u{2502}",
                 Style::default()
-                    .fg(theme::BORDER_COLOR)
+                    .fg(theme::SEPARATOR)
                     .bg(theme::STATUS_BG),
             ));
-            spans.push(Span::styled(
+            left_spans.push(Span::styled(
                 format!(" author: {} ", self.author_filter_text),
                 Style::default()
                     .fg(theme::FILTER_COLOR)
@@ -99,31 +79,32 @@ impl<'a> Widget for StatusBar<'a> {
             ));
         }
 
-        spans.push(Span::styled(
+        // Sync time
+        left_spans.push(Span::styled(
             "\u{2502}",
             Style::default()
-                .fg(theme::BORDER_COLOR)
+                .fg(theme::SEPARATOR)
                 .bg(theme::STATUS_BG),
         ));
-        spans.push(Span::styled(
+        left_spans.push(Span::styled(
             format!(" synced: {} ", self.last_sync),
             Style::default().bg(theme::STATUS_BG),
         ));
 
-        if let Some(remaining) = self.rate_limit {
-            spans.push(Span::styled(
-                "\u{2502}",
-                Style::default()
-                    .fg(theme::BORDER_COLOR)
-                    .bg(theme::STATUS_BG),
-            ));
-            spans.push(Span::styled(
-                format!(" API: {remaining} "),
-                Style::default().bg(theme::STATUS_BG),
-            ));
-        }
+        let left_line = Line::from(left_spans);
+        buf.set_line(area.x, area.y, &left_line, area.width);
 
-        let line = Line::from(spans);
-        buf.set_line(area.x, area.y, &line, area.width);
+        // Right-aligned "? help"
+        let help_text = "? help ";
+        let help_w = UnicodeWidthStr::width(help_text);
+        let area_w = area.width as usize;
+        if area_w > help_w {
+            let help_x = area.x + (area_w - help_w) as u16;
+            let help_span = Span::styled(
+                help_text,
+                Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG),
+            );
+            buf.set_line(help_x, area.y, &Line::from(help_span), help_w as u16);
+        }
     }
 }
