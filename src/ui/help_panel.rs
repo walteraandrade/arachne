@@ -11,14 +11,16 @@ const BINDINGS: &[(&str, &str)] = &[
     ("j/k  \u{2191}/\u{2193}", "Scroll"),
     ("h/l  \u{2190}/\u{2192}", "Switch panel"),
     ("H/L", "Scroll text"),
-    ("Tab / S-Tab", "Switch pane"),
+    ("Tab / S-Tab", "Switch project"),
+    ("d", "Toggle detail sidebar"),
+    ("m", "Toggle Local/Remote"),
     ("Enter", "Detail / Toggle"),
     ("/", "Filter branches"),
     ("a", "Filter author"),
     ("f", "Toggle forks"),
     ("r", "Refresh"),
     ("?", "This help"),
-    ("q", "Quit"),
+    ("q / Esc", "Quit / Close"),
 ];
 
 pub struct HelpPanel;

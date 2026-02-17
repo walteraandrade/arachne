@@ -1,0 +1,164 @@
+{
+  "issue": "Fork visualization broken in rebase/fast-forward workflows",
+  "date": "2026-02-17",
+  "status": "unresolved after 3 attempts",
+
+  "target_repo": {
+    "name": "smartnow/app",
+    "stats": "500 commits, 262 branches (6 local, 256 remote), 139 tags",
+    "workflow": "rebase/fast-forward — NO merge commits. Feature branches are rebased onto development, then fast-forward merged.",
+    "trunk_branches": ["development", "staging", "production"],
+    "local_branches": ["backup-t5-pre-rebase", "backup-t5-pre-rebase-v2", "development", "production", "staging", "replit-agent"],
+    "key_characteristic": "Feature branch tips (e.g. feat/t5) sit directly on development's first-parent chain after rebase. Trunk greedy-walk claims ALL commits → features get 0 unique commits → no visual branching."
+  },
+
+  "observed_symptoms": [
+    "All/most commits render in lane 0 as a single straight vertical line",
+    "No visible branching structure — graph looks like a flat list with occasional tiny fork connectors",
+    "Tags (v1.0.0-development.1 through .45) dominate the left column, pushing commit messages off-screen",
+    "Occasional long horizontal lines spanning the entire screen width (remote branches forking far right)",
+    "The top ~50 rows show only circles with tag labels, no commit messages visible",
+    "When scrolled down, commit messages appear but graph structure is still a single lane",
+    "No clear visual indication of where feature branches fork from development"
+  ],
+
+  "root_cause_analysis": {
+    "primary": "In rebase workflows, feature tips land on trunk's first-parent chain. The greedy trunk walk in assign_commits_to_branches claims every commit on the chain. Feature spines get 0 commits, 0 visual presence.",
+    "secondary": "262 remote branches create hundreds of spines, most with very few commits. These inflate the lane count and create visual noise (long horizontal connectors crossing many empty lanes).",
+    "tertiary": "139 tags all prefixed with 'v1.0.0-development.N' clutter the branch_names column, making the graph unreadable even if the topology were correct.",
+    "fundamental_tension": "Trunk must own the full first-parent chain for a clean vertical line. But features that were rebased onto trunk ALSO need visual representation, and they share the same commits."
+  },
+
+  "attempts": [
+    {
+      "id": 1,
+      "approach": "Walk-time stop at non_trunk_tips — during trunk walk, stop claiming commits when hitting a commit that is a non-trunk branch tip",
+      "result": "FAILED",
+      "why_failed": "262 remote branches have tips scattered throughout the chain. Trunk walk fragments into hundreds of tiny disconnected segments. Development lane has holes and looks like confetti."
+    },
+    {
+      "id": 2,
+      "approach": "Post-pass split_trunk_at_local_features — after trunk walk, find local feature spines with 0 commits whose tip is on a trunk spine. Split trunk's commit list at those positions, giving the segment to the feature.",
+      "result": "FAILED",
+      "why_failed": "backup-t5-pre-rebase and similar backup branches steal hundreds of trunk commits into lane 1. Development loses its full-height vertical. Also, the splitting logic breaks trunk continuity — trunk shows as disconnected segments. Removed in attempt 3.",
+      "code_location": "split_trunk_at_local_features() was in branch_assign.rs — now removed"
+    },
+    {
+      "id": 3,
+      "approach": "Phantom fork markers — keep trunk data intact, add visual-only phantom fork connectors. Features with 0 commits get a point-interval in assign_lanes and a single-row activate+deactivate in the pre-pass.",
+      "result": "Tests pass but visual output still broken",
+      "why_failed": "The phantom fork connector fires correctly in tests, but the real-world graph still shows a flat line. Likely reasons: (1) The phantom connector is a tiny BranchLeft/BranchRight at the tip row — easily missed in 500 rows. (2) The real problem may be deeper: the graph simply doesn't convey rebase workflow structure with the current model. A single horizontal tick at the fork point is not enough to visually indicate 'this is where feat/t5 was'. (3) The 262 remote branches and 139 tags create so much visual noise that even correct connectors are lost.",
+      "code_still_in_tree": true
+    }
+  ],
+
+  "current_code_state": {
+    "branch_assign_rs": {
+      "path": "src/graph/branch_assign.rs",
+      "description": "Clean — split_trunk_at_local_features removed. Simple greedy walk: trunk first, then features. Features on trunk chain get 0 commits.",
+      "key_function": "assign_commits_to_branches(dag, repo_data, trunk_names) -> BranchAssignment"
+    },
+    "layout_rs": {
+      "path": "src/graph/layout.rs",
+      "description": "Has phantom fork logic from attempt 3. assign_lanes accepts phantom_spines HashSet. Pre-pass includes phantom spines in tip_at and fork_at.",
+      "key_functions": [
+        "assign_lanes(assignment, trunk_count, dag, phantom_spines) -> LaneMap",
+        "compute_layout(dag, repo_data, trunk_branches) -> Vec<GraphRow>"
+      ]
+    },
+    "types_rs": {
+      "path": "src/graph/types.rs",
+      "description": "BranchSpine, BranchAssignment, LaneMap, GraphRow, Cell, CellSymbol (includes Crossing)"
+    },
+    "dag_rs": {
+      "path": "src/graph/dag.rs",
+      "description": "Kahn's topo sort with time tiebreaking. Newest-first ordering."
+    }
+  },
+
+  "pipeline_flow": [
+    "git::repo::read_repo(repo, max_commits) -> RepoData (commits, branches, tags, head)",
+    "Dag::from_repo_data(&data) -> Dag (nodes HashMap + topo_order Vec)",
+    "assign_commits_to_branches(dag, repo_data, trunk_names) -> BranchAssignment (spines + commit_to_branch)",
+    "assign_lanes(assignment, trunk_count, dag, phantom_spines) -> LaneMap (branch_to_lane + total_lanes)",
+    "compute_layout main loop: iterate topo_order, activate/deactivate spines, draw cells per row -> Vec<GraphRow>"
+  ],
+
+  "key_data_structures": {
+    "BranchSpine": {
+      "fields": "branch_idx, names, tip, commits, fork_point, parent_branch, is_trunk",
+      "note": "In rebase workflow, feature spines have commits=[], fork_point=Some(tip_commit) where tip_commit is on trunk"
+    },
+    "BranchAssignment": {
+      "fields": "spines: Vec<BranchSpine>, commit_to_branch: HashMap<Oid, usize>",
+      "note": "commit_to_branch maps every commit to one branch_idx. In rebase, all commits map to trunk."
+    },
+    "LaneMap": {
+      "fields": "branch_to_lane: Vec<usize>, total_lanes: usize",
+      "note": "Indexed by spine index (si), not branch_idx. Trunk spines indexed by branch_idx (latent bug?)."
+    }
+  },
+
+  "potential_directions": [
+    {
+      "idea": "Don't try to show branching structure for rebase workflows at all",
+      "detail": "Detect rebase workflow (feature tips on trunk chain, no merge commits). Show branch labels inline on trunk lane instead of trying to draw side lanes. Like 'git log --oneline --decorate'.",
+      "pros": "Simple, no visual noise, actually useful for rebase workflows",
+      "cons": "Loses the 'graph' aspect"
+    },
+    {
+      "idea": "Annotation markers instead of lanes",
+      "detail": "For phantom forks, instead of BranchLeft/BranchRight connectors to a side lane, render a colored dot or marker inline on the trunk commit row with the branch name. Like a tag but visually distinct.",
+      "pros": "No lane allocation needed, no visual noise from side lanes",
+      "cons": "Different from merge-workflow visualization, may need rendering changes"
+    },
+    {
+      "idea": "Filter/collapse remote branches",
+      "detail": "The 256 remote branches are the main source of noise. If only local branches + their origin/* counterparts were shown, the graph would be much cleaner. Add a branch filter to the UI.",
+      "pros": "Reduces noise dramatically, makes phantom forks actually visible",
+      "cons": "Doesn't fix the fundamental rebase fork visibility issue"
+    },
+    {
+      "idea": "Hybrid approach: trunk-aware commit coloring",
+      "detail": "Instead of trying to put commits in different lanes, keep all commits in trunk lane 0 but COLOR the commit dots differently. Commits between feature-tip and next-feature-tip get the feature's color. Like a colored stripe on the trunk.",
+      "pros": "No lane inflation, clear visual grouping, works with rebase",
+      "cons": "Breaks the mental model of lanes = branches"
+    },
+    {
+      "idea": "Smarter trunk walk that respects rebase boundaries",
+      "detail": "During trunk walk, detect commit sequences that belong to feature branches (via reflog, commit message patterns, or branch tip positions). Stop the greedy walk at feature boundaries. This is essentially attempt 1 but only for LOCAL feature tips, not all 262 branches.",
+      "pros": "Features get their own commits and lanes naturally",
+      "cons": "Attempt 2 tried a variant of this (post-pass splitting) and backup branches stole trunk commits. Would need to be more careful about which branches qualify."
+    },
+    {
+      "idea": "Three-column layout with branch sidebar",
+      "detail": "Separate the graph into: (1) branch labels column, (2) graph column (minimal lanes), (3) commit message column. Branch labels only shown at tip rows. Tags collapsed/hidden by default.",
+      "pros": "Cleaner layout, tags don't obscure graph",
+      "cons": "Layout already exists but tags still clutter"
+    }
+  ],
+
+  "important_gotchas": [
+    "strip_remote_prefix('origin/feat/t5') returns 'feat/t5' — but 'origin/development' returns 'development'. Any filter checking trunk names against branch names must strip prefix first.",
+    "branch_to_lane is indexed by spine index (si) for features but by branch_idx for trunks. This inconsistency could cause silent bugs if trunk spines are deduped.",
+    "The topo_order is newest-first (Kahn's with max-heap on time). This means tip rows appear at the top of the graph.",
+    "Phantom fork logic currently in code: tip_at and fork_at both fire at same row for phantoms. The fork_at handler calls add_merge_cells which draws BranchLeft/BranchRight. But the 'col' variable at that point is the TRUNK commit's lane (lane 0), and child_lane is the phantom's lane. So the connector goes from lane 0 to phantom lane — correct.",
+    "The test rebase_workflow_fork_visibility passes (phantom connectors render), but the real repo has too much noise to see them."
+  ],
+
+  "test_commands": {
+    "run_tests": "cargo test",
+    "run_app_on_target": "cargo run -- /path/to/smartnow/app",
+    "specific_test": "cargo test rebase_workflow_fork_visibility",
+    "all_layout_tests": "cargo test graph::layout::tests"
+  },
+
+  "files_to_read_first": [
+    "src/graph/layout.rs — compute_layout() is the main rendering pipeline",
+    "src/graph/branch_assign.rs — assign_commits_to_branches() determines which commits go to which branch",
+    "src/graph/types.rs — data structures: BranchSpine, BranchAssignment, LaneMap, GraphRow, CellSymbol",
+    "src/graph/dag.rs — Dag structure and topo sort",
+    "src/git/types.rs — CommitInfo, BranchInfo, TagInfo, RepoData, CommitSource",
+    "src/git/repo.rs — read_repo() reads git data into RepoData"
+  ]
+}

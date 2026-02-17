@@ -1,3 +1,4 @@
+use crate::data_source::ViewMode;
 use ratatui::style::Color;
 
 pub const BRANCH_COLORS: &[Color] = &[
@@ -29,6 +30,41 @@ pub const SECTION_SEPARATOR: Color = Color::Rgb(60, 60, 80);
 pub const DIM_PREFIX: Color = Color::Rgb(90, 90, 110);
 pub const ERROR_FG: Color = Color::LightRed;
 pub const SECTION_HEADER_FG: Color = Color::White;
+
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct ThemePalette {
+    pub chrome_bg: Color,
+    pub chrome_fg: Color,
+    pub content_bg: Color,
+    pub content_fg: Color,
+    pub selected_bg: Color,
+    pub header_bg: Color,
+    pub status_bg: Color,
+}
+
+pub fn palette_for_mode(mode: &ViewMode) -> ThemePalette {
+    match mode {
+        ViewMode::Local => ThemePalette {
+            chrome_bg: Color::Rgb(25, 25, 38),
+            chrome_fg: Color::Rgb(100, 95, 130),
+            content_bg: Color::Rgb(35, 35, 52),
+            content_fg: Color::Rgb(220, 220, 230),
+            selected_bg: Color::Rgb(50, 50, 80),
+            header_bg: Color::Rgb(25, 25, 38),
+            status_bg: Color::Rgb(30, 30, 40),
+        },
+        ViewMode::Remote => ThemePalette {
+            chrome_bg: Color::Rgb(25, 25, 38),
+            chrome_fg: Color::Rgb(100, 95, 130),
+            content_bg: Color::Rgb(18, 18, 28),
+            content_fg: Color::Rgb(170, 170, 190),
+            selected_bg: Color::Rgb(40, 40, 65),
+            header_bg: Color::Rgb(25, 25, 38),
+            status_bg: Color::Rgb(22, 22, 32),
+        },
+    }
+}
 
 pub fn branch_prefix_color(name: &str) -> Color {
     if name.starts_with("feat/") || name.starts_with("feature/") {

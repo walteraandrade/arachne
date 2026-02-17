@@ -1,3 +1,4 @@
+use crate::data_source::ViewMode;
 use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,
@@ -11,7 +12,6 @@ use unicode_width::UnicodeWidthStr;
 pub struct PaneInfo<'a> {
     pub name: &'a str,
     pub branch: &'a str,
-    pub is_active: bool,
     pub commit_count: usize,
 }
 
@@ -19,6 +19,9 @@ pub struct HeaderBar<'a> {
     pub panes: &'a [PaneInfo<'a>],
     pub last_sync: &'a str,
     pub author_filter: &'a str,
+    pub view_mode: Option<&'a ViewMode>,
+    pub project_count: usize,
+    pub active_project_idx: usize,
 }
 
 impl<'a> Widget for HeaderBar<'a> {
@@ -43,42 +46,40 @@ impl<'a> Widget for HeaderBar<'a> {
             Style::default().fg(theme::SEPARATOR).bg(theme::HEADER_BG),
         ));
 
-        let single = self.panes.len() == 1;
-        if single {
-            if let Some(p) = self.panes.first() {
+        if let Some(p) = self.panes.first() {
+            spans.push(Span::styled(
+                p.name.to_string(),
+                Style::default().bg(theme::HEADER_BG),
+            ));
+            spans.push(Span::styled(
+                format!(" ({}) ", p.branch),
+                Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
+            ));
+
+            // View mode indicator
+            let mode_label = match self.view_mode {
+                Some(ViewMode::Local) => "[Local]",
+                Some(ViewMode::Remote) => "[Remote]",
+                None => "",
+            };
+            if !mode_label.is_empty() {
                 spans.push(Span::styled(
-                    p.name.to_string(),
-                    Style::default().bg(theme::HEADER_BG),
-                ));
-                spans.push(Span::styled(
-                    format!(" ({}) ", p.branch),
-                    Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
-                ));
-                spans.push(Span::styled(
-                    format!("{} commits", p.commit_count),
+                    format!("{mode_label} "),
                     Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
                 ));
             }
-        } else {
-            for p in self.panes {
-                if p.is_active {
-                    spans.push(Span::styled(
-                        format!("[{}]", p.name),
-                        Style::default()
-                            .fg(theme::ACCENT)
-                            .bg(theme::HEADER_BG)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                    spans.push(Span::styled(
-                        format!(" ({}) {}  ", p.branch, p.commit_count),
-                        Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
-                    ));
-                } else {
-                    spans.push(Span::styled(
-                        format!("[{}] ", p.name),
-                        Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
-                    ));
-                }
+
+            spans.push(Span::styled(
+                format!("{} commits", p.commit_count),
+                Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+            ));
+
+            // Project index indicator (when multiple projects)
+            if self.project_count > 1 {
+                spans.push(Span::styled(
+                    format!("  [{}/{}]", self.active_project_idx + 1, self.project_count),
+                    Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+                ));
             }
         }
 

@@ -1,7 +1,7 @@
 use crate::git::types::CommitSource;
 use crate::graph::layout::format_time_short;
 use crate::graph::types::GraphRow;
-use crate::ui::theme;
+use crate::ui::theme::{self, ThemePalette};
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -18,8 +18,8 @@ pub struct GraphView<'a> {
     pub selected: usize,
     pub highlighted_oids: &'a std::collections::HashSet<crate::git::types::Oid>,
     pub is_active: bool,
-    pub is_first_pane: bool,
     pub trunk_count: usize,
+    pub palette: &'a ThemePalette,
 }
 
 impl<'a> Widget for GraphView<'a> {
@@ -28,27 +28,18 @@ impl<'a> Widget for GraphView<'a> {
             return;
         }
 
-        let area = if !self.is_first_pane {
-            // Vertical separator on left edge for non-first panes
-            let sep_style = Style::default().fg(theme::SEPARATOR);
-            for y in area.y..area.bottom() {
-                buf[(area.x, y)].set_char('\u{2503}');
-                buf[(area.x, y)].set_style(sep_style);
+        // Fill content background
+        let bg_style = Style::default().bg(self.palette.content_bg);
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                buf[(x, y)].set_style(bg_style);
             }
-            Rect {
-                x: area.x + 1,
-                y: area.y,
-                width: area.width.saturating_sub(1),
-                height: area.height,
-            }
-        } else {
-            area
-        };
+        }
 
         let visible = area.height as usize;
         let avail_w = area.width as usize;
         let sel_bg = if self.is_active {
-            theme::SELECTED_BG
+            self.palette.selected_bg
         } else {
             theme::UNFOCUSED_SEL_BG
         };

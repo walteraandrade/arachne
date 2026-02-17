@@ -11,7 +11,7 @@ pub struct FsWatcherHandle {
 
 pub fn start_fs_watcher(
     repo_path: &Path,
-    pane_idx: usize,
+    project_idx: usize,
     tx: mpsc::UnboundedSender<AppEvent>,
 ) -> notify::Result<FsWatcherHandle> {
     let git_dir = repo_path.join(".git");
@@ -42,7 +42,7 @@ pub fn start_fs_watcher(
         while raw_rx.recv().await.is_some() {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             while raw_rx.try_recv().is_ok() {}
-            let _ = tx.send(AppEvent::FsChanged(pane_idx));
+            let _ = tx.send(AppEvent::FsChanged(project_idx));
         }
     });
 

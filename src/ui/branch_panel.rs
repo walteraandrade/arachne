@@ -1,5 +1,5 @@
-use crate::app::RepoPane;
 use crate::git::types::{CommitSource, Oid};
+use crate::project::Project;
 use crate::graph::branch_assign::strip_remote_prefix;
 use crate::ui::theme;
 use ratatui::{
@@ -143,24 +143,24 @@ impl<'a> Widget for BranchPanel<'a> {
 }
 
 pub fn build_entries(
-    panes: &[RepoPane],
+    projects: &[Project],
     filter: &str,
     show_forks: bool,
     collapsed: &HashSet<SectionKey>,
 ) -> Vec<DisplayEntry> {
     let mut entries = Vec::new();
-    let single_pane = panes.len() == 1;
+    let single_pane = projects.len() == 1;
 
-    for (pane_idx, pane) in panes.iter().enumerate() {
+    for (project_idx, proj) in projects.iter().enumerate() {
         if !single_pane {
             entries.push(DisplayEntry {
-                label: pane.repo_name.clone(),
+                label: proj.name.clone(),
                 kind: EntryKind::RepoHeader,
             });
         }
 
-        let branches = &pane.repo_data.branches;
-        let tags = &pane.repo_data.tags;
+        let branches = &proj.repo_data.branches;
+        let tags = &proj.repo_data.tags;
 
         let local: Vec<_> = branches
             .iter()
@@ -170,7 +170,7 @@ pub fn build_entries(
 
         let has_local = !local.is_empty();
         if has_local {
-            let key = SectionKey::Local(pane_idx);
+            let key = SectionKey::Local(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             let count = local.len();
@@ -211,7 +211,7 @@ pub fn build_entries(
                     kind: EntryKind::Spacer,
                 });
             }
-            let key = SectionKey::Remote(pane_idx);
+            let key = SectionKey::Remote(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             let count = remote.len();
@@ -247,7 +247,7 @@ pub fn build_entries(
                     if let CommitSource::Fork(ref owner) = b.source {
                         if *owner != current_fork {
                             current_fork = owner.clone();
-                            let key = SectionKey::Fork(pane_idx, owner.clone());
+                            let key = SectionKey::Fork(project_idx, owner.clone());
                             let fork_count = forks
                                 .iter()
                                 .filter(
@@ -296,7 +296,7 @@ pub fn build_entries(
                     kind: EntryKind::Spacer,
                 });
             }
-            let key = SectionKey::Tags(pane_idx);
+            let key = SectionKey::Tags(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
             let count = filtered_tags.len();
@@ -326,10 +326,10 @@ pub fn max_entry_width(entries: &[DisplayEntry]) -> usize {
         .unwrap_or(15)
 }
 
-pub fn auto_collapse_defaults(panes: &[RepoPane], filter: &str) -> HashSet<SectionKey> {
+pub fn auto_collapse_defaults(projects: &[Project], filter: &str) -> HashSet<SectionKey> {
     let mut set = HashSet::new();
-    for (pane_idx, pane) in panes.iter().enumerate() {
-        let remote_count = pane
+    for (project_idx, proj) in projects.iter().enumerate() {
+        let remote_count = proj
             .repo_data
             .branches
             .iter()
@@ -340,7 +340,7 @@ pub fn auto_collapse_defaults(panes: &[RepoPane], filter: &str) -> HashSet<Secti
             .filter(|b| filter.is_empty() || b.name.contains(filter))
             .count();
         if remote_count > 15 {
-            set.insert(SectionKey::Remote(pane_idx));
+            set.insert(SectionKey::Remote(project_idx));
         }
     }
     set

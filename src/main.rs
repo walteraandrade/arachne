@@ -1,10 +1,12 @@
 mod app;
 mod config;
+mod data_source;
 mod error;
 mod event;
 mod git;
 mod github;
 mod graph;
+mod project;
 #[cfg(test)]
 mod test_utils;
 mod ui;
@@ -61,13 +63,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
+    app.event_tx = Some(tx.clone());
 
     let mut watchers: Vec<FsWatcherHandle> = Vec::new();
     let mut poller_handles: Vec<JoinHandle<()>> = Vec::new();
 
-    for (idx, pane) in app.panes.iter().enumerate() {
-        if let Some(ref r) = pane.repo {
-            if let Some(workdir) = r.workdir() {
+    for (idx, proj) in app.projects.iter().enumerate() {
+        if let Some(ref local) = proj.local_source {
+            if let Some(workdir) = local.repo.workdir() {
                 let repo_path = workdir.to_path_buf();
                 match watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
                     Ok(w) => watchers.push(w),
@@ -76,7 +79,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if pane.github_client.is_some() {
+        if proj.github_client().is_some() {
             let poll_tx = tx.clone();
             let handle = tokio::spawn(async move {
                 watcher::poll::start_github_poller(poll_tx, idx, poll_interval).await;
@@ -150,15 +153,15 @@ fn process_event(
             fs_changed.insert(idx);
         }
         AppEvent::GitHubUpdate(idx) => {
-            if let Some(pane) = app.panes.get(idx) {
-                if let Some(ref client) = pane.github_client {
+            if let Some(proj) = app.projects.get(idx) {
+                if let Some(client) = proj.github_client() {
                     let tx = tx.clone();
                     let client = client.clone();
                     tokio::spawn(async move {
                         let result = github::network::fetch_network_detached(&client).await;
                         let event = match result {
                             Ok((branches, commits, rate_limit)) => AppEvent::GitHubResult {
-                                pane_idx: idx,
+                                project_idx: idx,
                                 result: Ok(GitHubData {
                                     rate_limit,
                                     branches,
@@ -166,7 +169,7 @@ fn process_event(
                                 }),
                             },
                             Err(e) => AppEvent::GitHubResult {
-                                pane_idx: idx,
+                                project_idx: idx,
                                 result: Err(e),
                             },
                         };

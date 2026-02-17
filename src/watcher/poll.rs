@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 pub async fn start_github_poller(
     tx: mpsc::UnboundedSender<AppEvent>,
-    pane_idx: usize,
+    project_idx: usize,
     interval_secs: u64,
 ) {
     let secs = interval_secs.max(5);
@@ -13,7 +13,7 @@ pub async fn start_github_poller(
 
     loop {
         interval.tick().await;
-        if tx.send(AppEvent::GitHubUpdate(pane_idx)).is_err() {
+        if tx.send(AppEvent::GitHubUpdate(project_idx)).is_err() {
             break;
         }
     }

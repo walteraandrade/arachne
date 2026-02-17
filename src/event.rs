@@ -1,4 +1,4 @@
-use crate::git::types::{BranchInfo, CommitInfo};
+use crate::git::types::{BranchInfo, CommitInfo, RepoData};
 use crossterm::event::KeyEvent;
 
 #[derive(Debug)]
@@ -15,7 +15,11 @@ pub enum AppEvent {
     FsChanged(usize),
     GitHubUpdate(usize),
     GitHubResult {
-        pane_idx: usize,
+        project_idx: usize,
         result: std::result::Result<GitHubData, String>,
+    },
+    RemoteDataResult {
+        project_idx: usize,
+        result: std::result::Result<RepoData, String>,
     },
 }
