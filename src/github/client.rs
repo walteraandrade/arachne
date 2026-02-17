@@ -7,6 +7,16 @@ use octocrab::Octocrab;
 const MAX_FORKS: usize = 50;
 const MAX_BRANCHES_PER_FORK: usize = 100;
 
+fn api_err(e: octocrab::Error) -> ArachneError {
+    let msg = match &e {
+        octocrab::Error::GitHub { source, .. } => {
+            format!("{} ({})", source.message, source.status_code)
+        }
+        _ => "GitHub API request failed".to_string(),
+    };
+    ArachneError::GitHub(msg)
+}
+
 #[derive(Clone)]
 pub struct GitHubClient {
     octo: Octocrab,
@@ -19,7 +29,7 @@ impl GitHubClient {
         let octo = Octocrab::builder()
             .personal_token(token.to_string())
             .build()
-            .map_err(|e| ArachneError::GitHub(e.to_string()))?;
+            .map_err(api_err)?;
 
         Ok(Self {
             octo,
@@ -41,7 +51,7 @@ impl GitHubClient {
                 .page(page)
                 .send()
                 .await
-                .map_err(|e| ArachneError::GitHub(e.to_string()))?;
+                .map_err(api_err)?;
 
             if result.items.is_empty() {
                 break;
@@ -82,7 +92,7 @@ impl GitHubClient {
                 .page(page)
                 .send()
                 .await
-                .map_err(|e| ArachneError::GitHub(e.to_string()))?;
+                .map_err(api_err)?;
 
             if result.items.is_empty() {
                 break;
@@ -130,7 +140,7 @@ impl GitHubClient {
                 .page(page)
                 .send()
                 .await
-                .map_err(|e| ArachneError::GitHub(e.to_string()))?;
+                .map_err(api_err)?;
 
             if result.items.is_empty() {
                 break;

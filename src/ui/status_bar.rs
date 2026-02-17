@@ -15,7 +15,7 @@ pub struct StatusBar<'a> {
     pub filter_mode: FilterMode,
     pub filter_text: &'a str,
     pub author_filter_text: &'a str,
-    pub error_message: Option<&'a str>,
+    pub loading_message: Option<&'a str>,
     pub commit_count: usize,
     pub branch_count: usize,
 }
@@ -63,15 +63,15 @@ impl<'a> Widget for StatusBar<'a> {
             Style::default().bg(theme::STATUS_BG),
         ));
 
-        // Error message (replaces sync time when present)
-        if let Some(err) = self.error_message {
+        // Loading message (replaces sync time when active)
+        if let Some(msg) = self.loading_message {
             left_spans.push(Span::styled(
                 "\u{2502}",
                 Style::default().fg(theme::SEPARATOR).bg(theme::STATUS_BG),
             ));
             left_spans.push(Span::styled(
-                format!(" {err} "),
-                Style::default().fg(theme::ERROR_FG).bg(theme::STATUS_BG),
+                format!(" {msg} "),
+                Style::default().fg(theme::ACCENT).bg(theme::STATUS_BG),
             ));
         } else {
             // Author filter (if active)

@@ -29,6 +29,7 @@ pub const TRUNK_COLORS: &[Color] = &[Color::LightCyan, Color::LightYellow, Color
 pub const SECTION_SEPARATOR: Color = Color::Rgb(60, 60, 80);
 pub const DIM_PREFIX: Color = Color::Rgb(90, 90, 110);
 pub const ERROR_FG: Color = Color::LightRed;
+pub const WARN_FG: Color = Color::Yellow;
 pub const SECTION_HEADER_FG: Color = Color::White;
 
 #[derive(Clone)]

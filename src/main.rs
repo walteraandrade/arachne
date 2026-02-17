@@ -108,13 +108,23 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     loop {
         terminal.draw(|f| app.render(f))?;
 
-        let first = match rx.recv().await {
-            Some(e) => e,
-            None => break,
+        let first = if app.has_active_notification() {
+            match tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv()).await {
+                Ok(Some(e)) => Some(e),
+                Ok(None) => break,
+                Err(_) => None, // timeout — redraw to dismiss stale toast
+            }
+        } else {
+            match rx.recv().await {
+                Some(e) => Some(e),
+                None => break,
+            }
         };
 
         let mut fs_changed: HashSet<usize> = HashSet::new();
-        process_event(&mut app, first, &mut fs_changed, &tx);
+        if let Some(e) = first {
+            process_event(&mut app, e, &mut fs_changed, &tx);
+        }
         while let Ok(pending) = rx.try_recv() {
             process_event(&mut app, pending, &mut fs_changed, &tx);
         }

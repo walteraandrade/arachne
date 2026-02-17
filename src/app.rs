@@ -24,6 +24,8 @@ use ratatui::{
 };
 use std::collections::HashSet;
 
+use crate::ui::toast::{Notification, NotifyLevel};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Panel {
     Branches,
@@ -51,7 +53,7 @@ pub struct App {
     pub filter_text: String,
     pub author_filter_text: String,
     pub collapsed_sections: HashSet<SectionKey>,
-    pub error_message: Option<(String, std::time::Instant)>,
+    pub notification: Option<Notification>,
     cached_entries: Vec<DisplayEntry>,
 
     pub should_quit: bool,
@@ -77,10 +79,22 @@ impl App {
             filter_text: String::new(),
             author_filter_text: String::new(),
             collapsed_sections: HashSet::new(),
-            error_message: None,
+            notification: None,
             cached_entries: Vec::new(),
             should_quit: false,
         }
+    }
+
+    pub fn has_active_notification(&self) -> bool {
+        self.notification.is_some()
+    }
+
+    fn notify(&mut self, level: NotifyLevel, msg: impl Into<String>) {
+        self.notification = Some(Notification {
+            message: msg.into(),
+            level,
+            created: std::time::Instant::now(),
+        });
     }
 
     pub fn load_repos(&mut self) -> Result<()> {
@@ -164,7 +178,7 @@ impl App {
                         d
                     }
                     Err(e) => {
-                        proj.last_sync = format!("error: {e}");
+                        self.notify(NotifyLevel::Error, format!("{e}"));
                         return;
                     }
                 }
@@ -203,11 +217,10 @@ impl App {
                     proj.time_sorted_indices = project::build_time_sorted_indices(&proj.rows);
                     proj.cached_repo_data = None;
                     proj.last_sync = JUST_NOW.to_string();
-                    self.error_message = None;
+                    self.notification = None;
                 }
                 Err(e) => {
-                    proj.last_sync = format!("error: {e}");
-                    self.error_message = Some((e, std::time::Instant::now()));
+                    self.notify(NotifyLevel::Error, e);
                 }
             }
         }
@@ -250,11 +263,10 @@ impl App {
                     proj.last_sync = JUST_NOW.to_string();
                     self.graph_selected = 0;
                     self.graph_scroll_y = 0;
-                    self.error_message = None;
+                    self.notification = None;
                 }
                 Err(e) => {
-                    proj.last_sync = format!("error: {e}");
-                    self.error_message = Some((e, std::time::Instant::now()));
+                    self.notify(NotifyLevel::Error, e);
                 }
             }
         }
@@ -262,6 +274,12 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) {
+        if self.notification.is_some()
+            && !matches!(action, Action::None | Action::Quit | Action::ClosePopup)
+        {
+            self.notification = None;
+            return;
+        }
         match action {
             Action::Quit => self.should_quit = true,
             Action::ScrollDown => match self.active_panel {
@@ -351,32 +369,37 @@ impl App {
             }
             Action::ToggleViewMode => {
                 if let Some(proj) = self.projects.get_mut(self.active_project) {
-                    let new_mode = match proj.active_mode {
-                        ViewMode::Local => ViewMode::Remote,
-                        ViewMode::Remote => ViewMode::Local,
-                    };
-                    proj.active_mode = new_mode;
-
-                    if new_mode == ViewMode::Remote {
-                        if let Some(ref remote) = proj.remote_source {
-                            if let Some(ref tx) = self.event_tx {
-                                let client = remote.client.clone();
-                                let tx = tx.clone();
-                                let idx = self.active_project;
-                                let max = self.config.max_commits;
-                                self.loading_remote = true;
-                                tokio::spawn(async move {
-                                    let result = crate::github::remote_loader::load_remote_repo_data(&client, max).await;
-                                    let _ = tx.send(AppEvent::RemoteDataResult {
-                                        project_idx: idx,
-                                        result,
+                    match proj.active_mode {
+                        ViewMode::Local => {
+                            if proj.remote_source.is_none() {
+                                self.notify(
+                                    NotifyLevel::Warn,
+                                    "no github token \u{2014} set github_token in config or GITHUB_TOKEN env",
+                                );
+                                return;
+                            }
+                            proj.active_mode = ViewMode::Remote;
+                            if let Some(ref remote) = proj.remote_source {
+                                if let Some(ref tx) = self.event_tx {
+                                    let client = remote.client.clone();
+                                    let tx = tx.clone();
+                                    let idx = self.active_project;
+                                    let max = self.config.max_commits;
+                                    self.loading_remote = true;
+                                    tokio::spawn(async move {
+                                        let result = crate::github::remote_loader::load_remote_repo_data(&client, max).await;
+                                        let _ = tx.send(AppEvent::RemoteDataResult {
+                                            project_idx: idx,
+                                            result,
+                                        });
                                     });
-                                });
+                                }
                             }
                         }
-                    } else {
-                        // Switch back to local — rebuild from disk
-                        self.rebuild_graph(self.active_project);
+                        ViewMode::Remote => {
+                            proj.active_mode = ViewMode::Local;
+                            self.rebuild_graph(self.active_project);
+                        }
                     }
                 }
             }
@@ -567,7 +590,7 @@ impl App {
 
         self.render_body(frame, branch_area, graph_area);
 
-        self.dismiss_stale_errors();
+        self.dismiss_stale_notifications();
         self.render_status_bar(frame, status_area);
         self.render_overlays(frame, size);
     }
@@ -668,20 +691,20 @@ impl App {
         }
     }
 
-    fn dismiss_stale_errors(&mut self) {
-        if let Some((_, instant)) = &self.error_message {
-            if instant.elapsed() > std::time::Duration::from_secs(30) {
-                self.error_message = None;
+    fn dismiss_stale_notifications(&mut self) {
+        if let Some(ref n) = self.notification {
+            if n.created.elapsed() > std::time::Duration::from_secs(n.level.ttl_secs()) {
+                self.notification = None;
             }
         }
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
         let active = self.projects.get(self.active_project);
-        let error_msg = if self.loading_remote {
+        let loading_msg = if self.loading_remote {
             Some("loading remote data...")
         } else {
-            self.error_message.as_ref().map(|(msg, _)| msg.as_str())
+            None
         };
         let commit_count = active.map(|p| p.rows.len()).unwrap_or(0);
         let branch_count = active.map(|p| p.repo_data.branches.len()).unwrap_or(0);
@@ -691,7 +714,7 @@ impl App {
             filter_mode: self.filter_mode,
             filter_text: &self.filter_text,
             author_filter_text: &self.author_filter_text,
-            error_message: error_msg,
+            loading_message: loading_msg,
             commit_count,
             branch_count,
         };
@@ -701,6 +724,9 @@ impl App {
     fn render_overlays(&self, frame: &mut Frame, size: ratatui::layout::Rect) {
         if self.show_help {
             frame.render_widget(HelpPanel, size);
+        }
+        if let Some(ref n) = self.notification {
+            frame.render_widget(crate::ui::toast::Toast { notification: n }, size);
         }
     }
 

@@ -6,6 +6,7 @@ pub mod help_panel;
 pub mod input;
 pub mod status_bar;
 pub mod theme;
+pub mod toast;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 
