@@ -4,6 +4,8 @@ use crate::github::client::GitHubClient;
 use crate::graph::{dag::Dag, layout, types::GraphRow};
 use std::collections::HashMap;
 
+const MAX_GITHUB_FAILURES: u8 = 3;
+
 pub struct Project {
     pub name: String,
     pub local_source: Option<LocalSource>,
@@ -20,11 +22,16 @@ pub struct Project {
     pub rate_limit: Option<u32>,
     pub time_sorted_indices: Vec<usize>,
     pub cached_repo_data: Option<RepoData>,
+    pub github_failures: u8,
 }
 
 impl Project {
     pub fn github_client(&self) -> Option<&GitHubClient> {
         self.remote_source.as_ref().map(|s| &s.client)
+    }
+
+    pub fn github_polling_enabled(&self) -> bool {
+        self.remote_source.is_some() && self.github_failures < MAX_GITHUB_FAILURES
     }
 
     pub fn rebuild_layout(&mut self, trunk_branches: &[String]) {

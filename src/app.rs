@@ -135,9 +135,10 @@ impl App {
                 rate_limit: None,
                 time_sorted_indices,
                 cached_repo_data,
+                github_failures: 0,
             });
         }
-        self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.projects, "");
+        self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.projects);
         self.refresh_entries();
         Ok(())
     }
@@ -150,6 +151,7 @@ impl App {
         self.cached_entries = branch_panel::build_entries(
             active_slice,
             &self.filter_text,
+            &self.author_filter_text,
             self.show_forks,
             &self.collapsed_sections,
         );
@@ -213,6 +215,7 @@ impl App {
         if let Some(proj) = self.projects.get_mut(project_idx) {
             match result {
                 Ok(data) => {
+                    proj.github_failures = 0;
                     proj.rate_limit = data.rate_limit;
                     proj.repo_data.branches.extend(data.branches);
                     proj.dag.merge_remote(data.commits);
@@ -230,7 +233,16 @@ impl App {
                     self.notification = None;
                 }
                 Err(e) => {
-                    self.notify(NotifyLevel::Error, e);
+                    proj.github_failures = proj.github_failures.saturating_add(1);
+                    if proj.github_polling_enabled() {
+                        self.notify(NotifyLevel::Error, e);
+                    } else {
+                        let name = proj.name.clone();
+                        self.notify(
+                            NotifyLevel::Warn,
+                            format!("github polling disabled for {name} \u{2014} repeated failures"),
+                        );
+                    }
                 }
             }
         }
@@ -521,6 +533,18 @@ impl App {
                 } else {
                     self.collapsed_sections.insert(key);
                 }
+                self.refresh_entries();
+            } else if let branch_panel::EntryKind::Author { ref name } = entry.kind {
+                let name = name.clone();
+                if self.author_filter_text == name {
+                    self.author_filter_text.clear();
+                } else {
+                    self.author_filter_text = name;
+                }
+                for idx in 0..self.projects.len() {
+                    self.rebuild_graph_author_only(idx);
+                }
+                self.clamp_selected();
                 self.refresh_entries();
             } else if let Some(tip) = entry.tip_oid() {
                 if let Some(proj) = self.projects.get(self.active_project) {

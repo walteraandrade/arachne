@@ -164,6 +164,9 @@ fn process_event(
         }
         AppEvent::GitHubUpdate(idx) => {
             if let Some(proj) = app.projects.get(idx) {
+                if !proj.github_polling_enabled() {
+                    return;
+                }
                 if let Some(client) = proj.github_client() {
                     let tx = tx.clone();
                     let client = client.clone();
