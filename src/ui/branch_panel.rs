@@ -1,5 +1,4 @@
 use crate::git::types::{CommitSource, Oid};
-use crate::graph::branch_assign::strip_remote_prefix;
 use crate::project::Project;
 use crate::ui::theme;
 use ratatui::{
@@ -9,15 +8,15 @@ use ratatui::{
     text::{Line, Span},
     widgets::Widget,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SectionKey {
     Local(usize),
-    Remote(usize),
     Fork(usize, String),
     Tags(usize),
+    Authors(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -26,9 +25,9 @@ pub enum EntryKind {
     SectionHeader { key: SectionKey, count: usize },
     Spacer,
     LocalBranch { is_head: bool, tip: Oid },
-    RemoteBranch { tip: Oid },
     ForkBranch { tip: Oid },
     Tag { target: Oid },
+    Author { name: String },
 }
 
 pub struct DisplayEntry {
@@ -40,7 +39,6 @@ impl DisplayEntry {
     pub fn tip_oid(&self) -> Option<Oid> {
         match &self.kind {
             EntryKind::LocalBranch { tip, .. } => Some(*tip),
-            EntryKind::RemoteBranch { tip } => Some(*tip),
             EntryKind::ForkBranch { tip } => Some(*tip),
             EntryKind::Tag { target } => Some(*target),
             _ => None,
@@ -145,6 +143,7 @@ impl<'a> Widget for BranchPanel<'a> {
 pub fn build_entries(
     projects: &[Project],
     filter: &str,
+    author_filter: &str,
     show_forks: bool,
     collapsed: &HashSet<SectionKey>,
 ) -> Vec<DisplayEntry> {
@@ -162,14 +161,14 @@ pub fn build_entries(
         let branches = &proj.repo_data.branches;
         let tags = &proj.repo_data.tags;
 
+        // Local branches
         let local: Vec<_> = branches
             .iter()
             .filter(|b| matches!(b.source, CommitSource::Local) && !b.name.contains('/'))
             .filter(|b| filter.is_empty() || b.name.contains(filter))
             .collect();
 
-        let has_local = !local.is_empty();
-        if has_local {
+        if !local.is_empty() {
             let key = SectionKey::Local(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
@@ -195,41 +194,57 @@ pub fn build_entries(
             }
         }
 
-        let remote: Vec<_> = branches
-            .iter()
-            .filter(|b| {
-                matches!(b.source, CommitSource::Local | CommitSource::Remote(_))
-                    && b.name.contains('/')
-            })
-            .filter(|b| filter.is_empty() || b.name.contains(filter))
-            .collect();
-
-        if !remote.is_empty() {
-            if has_local {
-                entries.push(DisplayEntry {
-                    label: String::new(),
-                    kind: EntryKind::Spacer,
-                });
+        // Authors section
+        {
+            let mut freq: HashMap<&str, usize> = HashMap::new();
+            for c in &proj.repo_data.commits {
+                if !c.author.is_empty() {
+                    *freq.entry(c.author.as_str()).or_default() += 1;
+                }
             }
-            let key = SectionKey::Remote(project_idx);
-            let is_collapsed = collapsed.contains(&key);
-            let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
-            let count = remote.len();
-            entries.push(DisplayEntry {
-                label: format!("  {arrow} Remote"),
-                kind: EntryKind::SectionHeader { key, count },
-            });
-            if !is_collapsed {
-                for b in remote {
-                    let display_name = strip_remote_prefix(&b.name);
+            let mut authors: Vec<_> = freq.into_iter().collect();
+            authors.sort_by(|a, b| b.1.cmp(&a.1));
+            authors.truncate(10);
+
+            if !authors.is_empty() {
+                if !entries.is_empty()
+                    && !matches!(
+                        entries.last().map(|e| &e.kind),
+                        Some(EntryKind::Spacer | EntryKind::RepoHeader)
+                    )
+                {
                     entries.push(DisplayEntry {
-                        label: format!("    {display_name}"),
-                        kind: EntryKind::RemoteBranch { tip: b.tip },
+                        label: String::new(),
+                        kind: EntryKind::Spacer,
                     });
+                }
+                let key = SectionKey::Authors(project_idx);
+                let is_collapsed = collapsed.contains(&key);
+                let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
+                let count = authors.len();
+                entries.push(DisplayEntry {
+                    label: format!("  {arrow} Authors"),
+                    kind: EntryKind::SectionHeader { key, count },
+                });
+                if !is_collapsed {
+                    for (name, _freq) in &authors {
+                        let marker = if !author_filter.is_empty() && *name == author_filter {
+                            "\u{25b8} "
+                        } else {
+                            "  "
+                        };
+                        entries.push(DisplayEntry {
+                            label: format!("    {marker}{name}"),
+                            kind: EntryKind::Author {
+                                name: name.to_string(),
+                            },
+                        });
+                    }
                 }
             }
         }
 
+        // Forks
         if show_forks {
             let forks: Vec<_> = branches
                 .iter()
@@ -279,6 +294,7 @@ pub fn build_entries(
             }
         }
 
+        // Tags (sorted by recency from repo, limited to 10)
         let filtered_tags: Vec<_> = tags
             .iter()
             .filter(|t| filter.is_empty() || t.name.contains(filter))
@@ -299,13 +315,16 @@ pub fn build_entries(
             let key = SectionKey::Tags(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
-            let count = filtered_tags.len();
+            let total = filtered_tags.len();
             entries.push(DisplayEntry {
                 label: format!("  {arrow} Tags"),
-                kind: EntryKind::SectionHeader { key, count },
+                kind: EntryKind::SectionHeader {
+                    key,
+                    count: total,
+                },
             });
             if !is_collapsed {
-                for t in filtered_tags {
+                for t in filtered_tags.iter().take(10) {
                     entries.push(DisplayEntry {
                         label: format!("    ({})", t.name),
                         kind: EntryKind::Tag { target: t.target },
@@ -326,22 +345,11 @@ pub fn max_entry_width(entries: &[DisplayEntry]) -> usize {
         .unwrap_or(15)
 }
 
-pub fn auto_collapse_defaults(projects: &[Project], filter: &str) -> HashSet<SectionKey> {
+pub fn auto_collapse_defaults(projects: &[Project]) -> HashSet<SectionKey> {
     let mut set = HashSet::new();
-    for (project_idx, proj) in projects.iter().enumerate() {
-        let remote_count = proj
-            .repo_data
-            .branches
-            .iter()
-            .filter(|b| {
-                matches!(b.source, CommitSource::Local | CommitSource::Remote(_))
-                    && b.name.contains('/')
-            })
-            .filter(|b| filter.is_empty() || b.name.contains(filter))
-            .count();
-        if remote_count > 15 {
-            set.insert(SectionKey::Remote(project_idx));
-        }
+    for (project_idx, _proj) in projects.iter().enumerate() {
+        set.insert(SectionKey::Tags(project_idx));
+        set.insert(SectionKey::Authors(project_idx));
     }
     set
 }
@@ -434,9 +442,7 @@ fn entry_line(
     // Two-tone branch names for branch entries
     let is_branch = matches!(
         entry.kind,
-        EntryKind::LocalBranch { is_head: false, .. }
-            | EntryKind::RemoteBranch { .. }
-            | EntryKind::ForkBranch { .. }
+        EntryKind::LocalBranch { is_head: false, .. } | EntryKind::ForkBranch { .. }
     );
 
     if is_branch {
@@ -506,6 +512,7 @@ fn entry_line(
             .fg(theme::HEAD_COLOR)
             .add_modifier(Modifier::BOLD),
         EntryKind::Tag { .. } => Style::default().fg(theme::TAG_COLOR),
+        EntryKind::Author { .. } => Style::default().fg(theme::ACCENT),
         _ => Style::default(),
     };
 

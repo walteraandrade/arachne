@@ -78,15 +78,30 @@ fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
     repo.tag_foreach(|oid, name_bytes| {
         let raw = String::from_utf8_lossy(name_bytes);
         let name = raw.strip_prefix("refs/tags/").unwrap_or(&raw).to_string();
-        let target = repo
+        let target_oid = repo
             .find_tag(oid)
             .ok()
             .and_then(|tag| tag.target().ok())
-            .map(|obj| Oid::from_git2(obj.id()))
-            .unwrap_or(Oid::from_git2(oid));
-        out.push(TagInfo { name, target });
+            .map(|obj| obj.id())
+            .unwrap_or(oid);
+        let time = repo
+            .find_commit(target_oid)
+            .ok()
+            .map(|c| {
+                chrono::Utc
+                    .timestamp_opt(c.time().seconds(), 0)
+                    .single()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        out.push(TagInfo {
+            name,
+            target: Oid::from_git2(target_oid),
+            time,
+        });
         true
     })?;
+    out.sort_by(|a, b| b.time.cmp(&a.time));
     Ok(out)
 }
 
@@ -146,20 +161,31 @@ pub fn detect_repo_name(repo: &Repository) -> String {
     repo.find_remote("origin")
         .ok()
         .and_then(|remote| remote.url().map(String::from))
-        .and_then(|url| {
-            let url = url.trim_end_matches(".git");
-            if url.contains("github.com") {
-                let parts: Vec<&str> = url.rsplitn(3, '/').collect();
-                if parts.len() >= 2 {
-                    return Some(format!("{}/{}", parts[1], parts[0]));
-                }
-            }
-            url.rsplit('/').next().map(String::from)
-        })
+        .and_then(|url| parse_github_owner_repo(&url))
         .unwrap_or_else(|| {
             repo.workdir()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "unknown".to_string())
         })
+}
+
+fn parse_github_owner_repo(url: &str) -> Option<String> {
+    let url = url.trim_end_matches(".git");
+    if !url.contains("github.com") {
+        return url.rsplit('/').next().map(String::from);
+    }
+    // SSH: git@github.com:owner/repo
+    if let Some(path) = url.strip_prefix("git@github.com:") {
+        let parts: Vec<&str> = path.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Some(format!("{}/{}", parts[0], parts[1]));
+        }
+    }
+    // HTTPS: https://github.com/owner/repo
+    let parts: Vec<&str> = url.rsplitn(3, '/').collect();
+    if parts.len() >= 2 {
+        return Some(format!("{}/{}", parts[1], parts[0]));
+    }
+    url.rsplit('/').next().map(String::from)
 }

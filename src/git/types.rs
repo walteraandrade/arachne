@@ -69,6 +69,7 @@ pub struct BranchInfo {
 pub struct TagInfo {
     pub name: String,
     pub target: Oid,
+    pub time: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Default)]

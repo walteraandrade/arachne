@@ -65,7 +65,7 @@ pub fn map_key(key: KeyEvent, filter_mode: FilterMode) -> Action {
         KeyCode::BackTab => Action::PrevProject,
         KeyCode::Char('m') => Action::ToggleViewMode,
         KeyCode::Char('d') => Action::ToggleDetailPanel,
-        KeyCode::Enter => Action::Select,
+        KeyCode::Enter | KeyCode::Char(' ') => Action::Select,
         KeyCode::Char('f') => Action::ToggleForks,
         KeyCode::Char('/') => Action::Filter,
         KeyCode::Char('a') => Action::AuthorFilter,
