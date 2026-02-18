@@ -315,12 +315,12 @@ pub fn build_entries(
             let key = SectionKey::Tags(project_idx);
             let is_collapsed = collapsed.contains(&key);
             let arrow = if is_collapsed { "\u{25b6}" } else { "\u{25bc}" };
-            let total = filtered_tags.len();
+            let count = filtered_tags.len().min(10);
             entries.push(DisplayEntry {
                 label: format!("  {arrow} Tags"),
                 kind: EntryKind::SectionHeader {
                     key,
-                    count: total,
+                    count,
                 },
             });
             if !is_collapsed {

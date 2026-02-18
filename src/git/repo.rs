@@ -75,25 +75,34 @@ fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
 
 fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
     let mut out = Vec::new();
+    let mut callback_err: Option<git2::Error> = None;
     repo.tag_foreach(|oid, name_bytes| {
         let raw = String::from_utf8_lossy(name_bytes);
         let name = raw.strip_prefix("refs/tags/").unwrap_or(&raw).to_string();
-        let target_oid = repo
-            .find_tag(oid)
-            .ok()
-            .and_then(|tag| tag.target().ok())
-            .map(|obj| obj.id())
-            .unwrap_or(oid);
-        let time = repo
-            .find_commit(target_oid)
-            .ok()
-            .map(|c| {
-                chrono::Utc
-                    .timestamp_opt(c.time().seconds(), 0)
-                    .single()
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
+        let target_oid = match repo.find_tag(oid) {
+            Ok(tag) => match tag.target() {
+                Ok(obj) => obj.id(),
+                Err(e) => {
+                    callback_err = Some(e);
+                    return false;
+                }
+            },
+            Err(e) if e.code() == git2::ErrorCode::NotFound => oid,
+            Err(e) => {
+                callback_err = Some(e);
+                return false;
+            }
+        };
+        let time = match repo.find_commit(target_oid) {
+            Ok(c) => chrono::Utc
+                .timestamp_opt(c.time().seconds(), 0)
+                .single(),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => None,
+            Err(e) => {
+                callback_err = Some(e);
+                return false;
+            }
+        };
         out.push(TagInfo {
             name,
             target: Oid::from_git2(target_oid),
@@ -101,6 +110,9 @@ fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
         });
         true
     })?;
+    if let Some(e) = callback_err {
+        return Err(e.into());
+    }
     out.sort_by(|a, b| b.time.cmp(&a.time));
     Ok(out)
 }
@@ -171,7 +183,7 @@ pub fn detect_repo_name(repo: &Repository) -> String {
 }
 
 fn parse_github_owner_repo(url: &str) -> Option<String> {
-    let url = url.trim_end_matches(".git");
+    let url = url.trim_end_matches(".git").trim_end_matches('/');
     if !url.contains("github.com") {
         return url.rsplit('/').next().map(String::from);
     }
