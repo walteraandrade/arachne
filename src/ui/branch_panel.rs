@@ -73,43 +73,13 @@ pub struct BranchPanel<'a> {
 
 impl<'a> Widget for BranchPanel<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        if area.height < 2 {
+        if area.height == 0 {
             return;
         }
 
-        // Header line: "Branches"
-        let header_fg = if self.focused {
-            theme::ACCENT
-        } else {
-            theme::PANEL_LABEL
-        };
-        let header_style = Style::default()
-            .fg(header_fg)
-            .bg(theme::HEADER_BG)
-            .add_modifier(Modifier::BOLD);
-        for x in area.x..area.right() {
-            buf[(x, area.y)].set_style(Style::default().bg(theme::HEADER_BG));
-        }
-        buf.set_line(
-            area.x,
-            area.y,
-            &Line::from(Span::styled("Branches", header_style)),
-            area.width,
-        );
-
-        // Horizontal separator
-        if area.height < 3 {
-            return;
-        }
-        let sep_style = Style::default().fg(theme::SEPARATOR);
-        for x in area.x..area.right() {
-            buf[(x, area.y + 1)].set_char('\u{2500}');
-            buf[(x, area.y + 1)].set_style(sep_style);
-        }
-
-        let inner_y = area.y + 2;
+        let inner_y = area.y;
         let inner_w = area.width as usize;
-        let visible = (area.height.saturating_sub(2)) as usize;
+        let visible = area.height as usize;
 
         let sel_bg = if self.focused {
             theme::SELECTED_BG
@@ -389,9 +359,9 @@ fn section_header_line(label: &str, count: usize, selected: bool, width: usize) 
     };
 
     let dim_style = if selected {
-        Style::default().fg(theme::DIM_TEXT).bg(theme::SELECTED_BG)
+        Style::default().fg(theme::ACCENT).bg(theme::SELECTED_BG)
     } else {
-        Style::default().fg(theme::DIM_TEXT)
+        Style::default().fg(theme::ACCENT)
     };
 
     let sep_style = if selected {

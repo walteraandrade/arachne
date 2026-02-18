@@ -7,8 +7,10 @@ use crate::event::{AppEvent, GitHubData};
 use crate::git::{repo, types::RepoData};
 use crate::graph::{dag::Dag, filter::filter_by_author, layout};
 use crate::project::{self, Project};
+use crate::screen::{ConfigAction, ConfigScreenState, Screen};
 use crate::ui::{
     branch_panel::{self, BranchPanel, DisplayEntry, SectionKey},
+    config_screen::ConfigScreen,
     detail_panel::DetailPanel,
     graph_view::GraphView,
     header_bar::{HeaderBar, PaneInfo},
@@ -18,7 +20,9 @@ use crate::ui::{
     theme,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    widgets::{Block, Borders},
     Frame,
 };
 use std::collections::HashSet;
@@ -39,6 +43,7 @@ pub struct App {
     pub active_project: usize,
     pub event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
 
+    pub screen: Screen,
     pub active_panel: Panel,
     pub graph_scroll_y: usize,
     pub graph_selected: usize,
@@ -66,6 +71,7 @@ impl App {
             projects: Vec::new(),
             active_project: 0,
             event_tx: None,
+            screen: Screen::Graph,
             active_panel: Panel::Graph,
             graph_scroll_y: 0,
             graph_selected: 0,
@@ -251,10 +257,16 @@ impl App {
 
     pub fn handle_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::Key(key) => {
-                let action = input::map_key(key, self.filter_mode);
-                self.handle_action(action);
-            }
+            AppEvent::Key(key) => match &mut self.screen {
+                Screen::Config(ref mut state) => {
+                    let action = state.handle_key(key);
+                    self.handle_config_action(action);
+                }
+                Screen::Graph => {
+                    let action = input::map_key(key, self.filter_mode);
+                    self.handle_graph_action(action);
+                }
+            },
             AppEvent::GitHubResult {
                 project_idx,
                 result,
@@ -295,7 +307,101 @@ impl App {
         self.refresh_entries();
     }
 
-    fn handle_action(&mut self, action: Action) {
+    fn handle_config_action(&mut self, action: ConfigAction) {
+        match action {
+            ConfigAction::Close => {
+                self.screen = Screen::Graph;
+            }
+            ConfigAction::Save => {
+                if let Screen::Config(ref state) = self.screen {
+                    let new_config = state.draft.clone();
+                    if let Err(e) = new_config.save() {
+                        self.notify(NotifyLevel::Error, format!("save failed: {e}"));
+                        return;
+                    }
+                    let was_first_launch = state.first_launch;
+                    self.config = new_config;
+                    self.screen = Screen::Graph;
+                    if was_first_launch {
+                        let _ = self.load_repos();
+                        if let Some(ref tx) = self.event_tx {
+                            let _ = tx.send(AppEvent::ConfigSaved);
+                        }
+                    }
+                    self.notify(NotifyLevel::Info, "config saved");
+                }
+            }
+            ConfigAction::Quit | ConfigAction::QuitConfirm => {
+                self.should_quit = true;
+            }
+            ConfigAction::AddItem => {
+                if let Screen::Config(ref mut state) = self.screen {
+                    match state.active_section {
+                        crate::screen::ConfigSection::Repos => {
+                            state.draft.repos.push(crate::config::RepoEntry {
+                                path: std::path::PathBuf::from(""),
+                                name: None,
+                            });
+                            state.cursor = state.draft.repos.len().saturating_sub(1);
+                            state.dirty = true;
+                            state.start_edit_public();
+                        }
+                        crate::screen::ConfigSection::Trunk => {
+                            state.draft.trunk_branches.push(String::new());
+                            state.cursor = state.draft.trunk_branches.len().saturating_sub(1);
+                            state.dirty = true;
+                            state.start_edit_public();
+                        }
+                        crate::screen::ConfigSection::Profiles => {
+                            let name = format!("profile-{}", state.draft.profiles.len() + 1);
+                            state.draft.profiles.push(crate::config::ProfileEntry {
+                                name,
+                                ..Default::default()
+                            });
+                            state.cursor = state.draft.profiles.len().saturating_sub(1);
+                            state.dirty = true;
+                        }
+                        crate::screen::ConfigSection::Theme => {}
+                    }
+                }
+            }
+            ConfigAction::RemoveItem => {
+                if let Screen::Config(ref mut state) = self.screen {
+                    match state.active_section {
+                        crate::screen::ConfigSection::Repos => {
+                            if !state.draft.repos.is_empty() {
+                                let idx = state.cursor.min(state.draft.repos.len() - 1);
+                                state.draft.repos.remove(idx);
+                                state.dirty = true;
+                                state.clamp_cursor();
+                            }
+                        }
+                        crate::screen::ConfigSection::Trunk => {
+                            if !state.draft.trunk_branches.is_empty() {
+                                let idx =
+                                    state.cursor.min(state.draft.trunk_branches.len() - 1);
+                                state.draft.trunk_branches.remove(idx);
+                                state.dirty = true;
+                                state.clamp_cursor();
+                            }
+                        }
+                        crate::screen::ConfigSection::Profiles => {
+                            if state.draft.profiles.len() > 1 {
+                                let idx = state.cursor.min(state.draft.profiles.len() - 1);
+                                state.draft.profiles.remove(idx);
+                                state.dirty = true;
+                                state.clamp_cursor();
+                            }
+                        }
+                        crate::screen::ConfigSection::Theme => {}
+                    }
+                }
+            }
+            ConfigAction::None => {}
+        }
+    }
+
+    fn handle_graph_action(&mut self, action: Action) {
         if self.notification.is_some()
             && !matches!(action, Action::None | Action::Quit | Action::ClosePopup)
         {
@@ -502,6 +608,10 @@ impl App {
                 }
             }
             Action::Help => self.show_help = !self.show_help,
+            Action::OpenConfig => {
+                let state = ConfigScreenState::new(&self.config);
+                self.screen = Screen::Config(state);
+            }
             Action::ClosePopup => {
                 if self.show_help {
                     self.show_help = false;
@@ -556,13 +666,32 @@ impl App {
         }
     }
 
+    // ── Render dispatch ─────────────────────────────────────────────
+
     pub fn render(&mut self, frame: &mut Frame) {
         let size = frame.area();
 
+        // Fill entire terminal with APP_BG
+        let bg_style = Style::default().bg(theme::APP_BG);
+        for y in size.y..size.bottom() {
+            for x in size.x..size.right() {
+                frame.buffer_mut()[(x, y)].set_style(bg_style);
+            }
+        }
+
+        match &self.screen {
+            Screen::Graph => self.render_graph_screen(frame, size),
+            Screen::Config(state) => {
+                let widget = ConfigScreen { state };
+                frame.render_widget(widget, size);
+            }
+        }
+    }
+
+    fn render_graph_screen(&mut self, frame: &mut Frame, size: Rect) {
         let vert = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(1),
                 Constraint::Length(1),
@@ -570,9 +699,8 @@ impl App {
             .split(size);
 
         let header_area = vert[0];
-        let hsep_area = vert[1];
-        let body_area = vert[2];
-        let status_area = vert[3];
+        let body_area = vert[1];
+        let status_area = vert[2];
 
         self.render_header(frame, header_area);
 
@@ -582,11 +710,9 @@ impl App {
 
         let mut body_constraints = vec![
             Constraint::Length(panel_w),
-            Constraint::Length(1), // left vsep
-            Constraint::Min(1),    // graph
+            Constraint::Min(1), // graph
         ];
         if self.show_detail {
-            body_constraints.push(Constraint::Length(1)); // right vsep
             body_constraints.push(Constraint::Length(detail_w));
         }
 
@@ -596,45 +722,139 @@ impl App {
             .split(body_area);
 
         let branch_area = body_chunks[0];
-        let vsep_area = body_chunks[1];
-        let graph_area = body_chunks[2];
+        let graph_area = body_chunks[1];
 
-        self.render_separators(frame, hsep_area, vsep_area);
+        // Render bordered panels
+        self.render_bordered_branch_panel(frame, branch_area);
+        self.render_bordered_graph_panel(frame, graph_area);
 
-        if self.show_detail && body_chunks.len() >= 5 {
-            let right_vsep = body_chunks[3];
-            let detail_area = body_chunks[4];
-
-            // Right vertical separator
-            let sep_style = ratatui::style::Style::default().fg(theme::SEPARATOR);
-            for y in right_vsep.y..right_vsep.bottom() {
-                frame.buffer_mut()[(right_vsep.x, y)].set_char('\u{2503}');
-                frame.buffer_mut()[(right_vsep.x, y)].set_style(sep_style);
-            }
-            // Cross junction on hsep
-            if right_vsep.x > hsep_area.x && right_vsep.x < hsep_area.right() {
-                frame.buffer_mut()[(right_vsep.x, hsep_area.y)].set_char('\u{253c}');
-            }
-
-            if let Some(proj) = self.projects.get(self.active_project) {
-                if let Some(row) = proj.rows.get(self.graph_selected) {
-                    let detail = DetailPanel {
-                        row,
-                        focused: self.active_panel == Panel::Detail,
-                    };
-                    frame.render_widget(detail, detail_area);
-                }
-            }
+        if self.show_detail && body_chunks.len() >= 3 {
+            let detail_area = body_chunks[2];
+            self.render_bordered_detail_panel(frame, detail_area);
         }
-
-        self.render_body(frame, branch_area, graph_area);
 
         self.dismiss_stale_notifications();
         self.render_status_bar(frame, status_area);
         self.render_overlays(frame, size);
     }
 
-    fn render_header(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_bordered_branch_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let is_active = self.active_panel == Panel::Branches;
+        let border_color = if is_active {
+            theme::ACTIVE_PANEL_BORDER
+        } else {
+            theme::INACTIVE_PANEL_BORDER
+        };
+        let title_color = if is_active {
+            theme::ACCENT
+        } else {
+            theme::PANEL_LABEL
+        };
+
+        let block = Block::default()
+            .title(" Branches ")
+            .title_style(
+                Style::default()
+                    .fg(title_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let visible_height = inner.height as usize;
+        if visible_height > 0 {
+            if self.branch_selected >= self.branch_scroll + visible_height {
+                self.branch_scroll = self.branch_selected - visible_height + 1;
+            }
+            if self.branch_selected < self.branch_scroll {
+                self.branch_scroll = self.branch_selected;
+            }
+        }
+
+        let branch_panel = BranchPanel {
+            entries: &self.cached_entries,
+            selected: self.branch_selected,
+            scroll: self.branch_scroll,
+            focused: is_active,
+        };
+        frame.render_widget(branch_panel, inner);
+    }
+
+    fn render_bordered_graph_panel(&mut self, frame: &mut Frame, area: Rect) {
+        let is_active = self.active_panel == Panel::Graph;
+        let border_color = if is_active {
+            theme::ACTIVE_PANEL_BORDER
+        } else {
+            theme::INACTIVE_PANEL_BORDER
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let visible_height = (inner.height as usize).saturating_sub(1); // -1 for lane header
+        self.ensure_scroll_bounds(visible_height);
+
+        let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
+
+        if let Some(proj) = self.projects.get(self.active_project) {
+            let palette = theme::palette_for_mode(&proj.active_mode);
+            let graph_view = GraphView {
+                rows: &proj.rows,
+                scroll_y: self.graph_scroll_y,
+                scroll_x: proj.scroll_x,
+                selected: self.graph_selected,
+                highlighted_oids: &highlighted,
+                is_active,
+                trunk_count: proj.trunk_count,
+                palette: &palette,
+                branch_index_to_name: &proj.branch_index_to_name,
+            };
+            frame.render_widget(graph_view, inner);
+        }
+    }
+
+    fn render_bordered_detail_panel(&self, frame: &mut Frame, area: Rect) {
+        let is_active = self.active_panel == Panel::Detail;
+        let border_color = if is_active {
+            theme::ACTIVE_PANEL_BORDER
+        } else {
+            theme::INACTIVE_PANEL_BORDER
+        };
+        let title_color = if is_active {
+            theme::ACCENT
+        } else {
+            theme::PANEL_LABEL
+        };
+
+        let block = Block::default()
+            .title(" Detail ")
+            .title_style(
+                Style::default()
+                    .fg(title_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        if let Some(proj) = self.projects.get(self.active_project) {
+            if let Some(row) = proj.rows.get(self.graph_selected) {
+                let detail = DetailPanel {
+                    row,
+                    focused: is_active,
+                };
+                frame.render_widget(detail, inner);
+            }
+        }
+    }
+
+    fn render_header(&self, frame: &mut Frame, area: Rect) {
         let proj = self.projects.get(self.active_project);
         let info = proj.map(|p| PaneInfo {
             name: &p.name,
@@ -659,74 +879,7 @@ impl App {
     fn branch_panel_width(&self, term_w: u16) -> u16 {
         let max_w = branch_panel::max_entry_width(&self.cached_entries);
         let tw = term_w as usize;
-        (max_w + 2).clamp(20, (tw / 3).max(20)) as u16
-    }
-
-    fn render_separators(
-        &self,
-        frame: &mut Frame,
-        hsep_area: ratatui::layout::Rect,
-        vsep_area: ratatui::layout::Rect,
-    ) {
-        let sep_style = ratatui::style::Style::default().fg(theme::SEPARATOR);
-        for x in hsep_area.x..hsep_area.right() {
-            frame.buffer_mut()[(x, hsep_area.y)].set_char('\u{2500}');
-            frame.buffer_mut()[(x, hsep_area.y)].set_style(sep_style);
-        }
-        if vsep_area.x > hsep_area.x && vsep_area.x < hsep_area.right() {
-            frame.buffer_mut()[(vsep_area.x, hsep_area.y)].set_char('\u{253c}');
-        }
-        for y in vsep_area.y..vsep_area.bottom() {
-            frame.buffer_mut()[(vsep_area.x, y)].set_char('\u{2503}');
-            frame.buffer_mut()[(vsep_area.x, y)].set_style(sep_style);
-        }
-    }
-
-    fn render_body(
-        &mut self,
-        frame: &mut Frame,
-        branch_area: ratatui::layout::Rect,
-        graph_area: ratatui::layout::Rect,
-    ) {
-        let visible_height = (graph_area.height as usize).saturating_sub(1); // -1 for lane header
-        self.ensure_scroll_bounds(visible_height);
-
-        let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
-
-        let branch_visible = branch_area.height.saturating_sub(2) as usize;
-        if branch_visible > 0 {
-            if self.branch_selected >= self.branch_scroll + branch_visible {
-                self.branch_scroll = self.branch_selected - branch_visible + 1;
-            }
-            if self.branch_selected < self.branch_scroll {
-                self.branch_scroll = self.branch_selected;
-            }
-        }
-
-        let branch_panel = BranchPanel {
-            entries: &self.cached_entries,
-            selected: self.branch_selected,
-            scroll: self.branch_scroll,
-            focused: self.active_panel == Panel::Branches,
-        };
-        frame.render_widget(branch_panel, branch_area);
-
-        // Single-project graph
-        if let Some(proj) = self.projects.get(self.active_project) {
-            let palette = theme::palette_for_mode(&proj.active_mode);
-            let graph_view = GraphView {
-                rows: &proj.rows,
-                scroll_y: self.graph_scroll_y,
-                scroll_x: proj.scroll_x,
-                selected: self.graph_selected,
-                highlighted_oids: &highlighted,
-                is_active: self.active_panel == Panel::Graph,
-                trunk_count: proj.trunk_count,
-                palette: &palette,
-                branch_index_to_name: &proj.branch_index_to_name,
-            };
-            frame.render_widget(graph_view, graph_area);
-        }
+        (max_w + 4).clamp(22, (tw / 3).max(22)) as u16
     }
 
     fn dismiss_stale_notifications(&mut self) {
@@ -737,7 +890,7 @@ impl App {
         }
     }
 
-    fn render_status_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
         let active = self.projects.get(self.active_project);
         let loading_msg = if self.loading_remote {
             Some("loading remote data...")
@@ -759,7 +912,7 @@ impl App {
         frame.render_widget(status, area);
     }
 
-    fn render_overlays(&self, frame: &mut Frame, size: ratatui::layout::Rect) {
+    fn render_overlays(&self, frame: &mut Frame, size: Rect) {
         if self.show_help {
             frame.render_widget(HelpPanel, size);
         }

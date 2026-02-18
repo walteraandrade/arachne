@@ -7,6 +7,8 @@ mod git;
 mod github;
 mod graph;
 mod project;
+mod screen;
+mod session;
 #[cfg(test)]
 mod test_utils;
 mod ui;
@@ -22,6 +24,7 @@ use crossterm::{
 };
 use event::{AppEvent, GitHubData};
 use futures::StreamExt;
+use screen::{ConfigScreenState, Screen};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -42,10 +45,19 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let config = Config::load(cli.repo);
 
     let poll_interval = config.poll_interval_secs;
+    let is_first_launch = !Config::config_file_exists();
     let mut app = App::new(config);
-    if let Err(e) = app.load_repos() {
+
+    if is_first_launch {
+        app.screen = Screen::Config(ConfigScreenState::first_launch(&app.config));
+    } else if let Err(e) = app.load_repos() {
         eprintln!("Error: {e}");
         std::process::exit(1);
+    }
+
+    // Load session state
+    if !is_first_launch {
+        session::restore(&mut app);
     }
 
     // Install panic hook before entering raw mode so terminal is restored on panic
@@ -68,24 +80,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut watchers: Vec<FsWatcherHandle> = Vec::new();
     let mut poller_handles: Vec<JoinHandle<()>> = Vec::new();
 
-    for (idx, proj) in app.projects.iter().enumerate() {
-        if let Some(ref local) = proj.local_source {
-            if let Some(workdir) = local.repo.workdir() {
-                let repo_path = workdir.to_path_buf();
-                match watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
-                    Ok(w) => watchers.push(w),
-                    Err(e) => eprintln!("warn: fs watcher failed for {}: {e}", repo_path.display()),
-                }
-            }
-        }
-
-        if proj.github_client().is_some() {
-            let poll_tx = tx.clone();
-            let handle = tokio::spawn(async move {
-                watcher::poll::start_github_poller(poll_tx, idx, poll_interval).await;
-            });
-            poller_handles.push(handle);
-        }
+    if !is_first_launch {
+        start_watchers_and_pollers(&app, &tx, poll_interval, &mut watchers, &mut poller_handles);
     }
 
     let input_tx = tx.clone();
@@ -122,20 +118,42 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         };
 
         let mut fs_changed: HashSet<usize> = HashSet::new();
+        let mut config_saved = false;
         if let Some(e) = first {
-            process_event(&mut app, e, &mut fs_changed, &tx);
+            process_event(&mut app, e, &mut fs_changed, &tx, &mut config_saved);
         }
         while let Ok(pending) = rx.try_recv() {
-            process_event(&mut app, pending, &mut fs_changed, &tx);
+            process_event(&mut app, pending, &mut fs_changed, &tx, &mut config_saved);
         }
         for idx in fs_changed {
             app.rebuild_graph(idx);
+        }
+        if config_saved {
+            // Re-start watchers/pollers after config save (first-launch or profile switch)
+            for w in &watchers {
+                w.debounce_task.abort();
+            }
+            for h in &poller_handles {
+                h.abort();
+            }
+            watchers.clear();
+            poller_handles.clear();
+            start_watchers_and_pollers(
+                &app,
+                &tx,
+                app.config.poll_interval_secs,
+                &mut watchers,
+                &mut poller_handles,
+            );
         }
 
         if app.should_quit {
             break;
         }
     }
+
+    // Save session before exit
+    session::save(&app);
 
     input_handle.abort();
     for w in &watchers {
@@ -152,11 +170,40 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn start_watchers_and_pollers(
+    app: &App,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+    poll_interval: u64,
+    watchers: &mut Vec<FsWatcherHandle>,
+    poller_handles: &mut Vec<JoinHandle<()>>,
+) {
+    for (idx, proj) in app.projects.iter().enumerate() {
+        if let Some(ref local) = proj.local_source {
+            if let Some(workdir) = local.repo.workdir() {
+                let repo_path = workdir.to_path_buf();
+                match watcher::fs::start_fs_watcher(&repo_path, idx, tx.clone()) {
+                    Ok(w) => watchers.push(w),
+                    Err(e) => eprintln!("warn: fs watcher failed for {}: {e}", repo_path.display()),
+                }
+            }
+        }
+
+        if proj.github_client().is_some() {
+            let poll_tx = tx.clone();
+            let handle = tokio::spawn(async move {
+                watcher::poll::start_github_poller(poll_tx, idx, poll_interval).await;
+            });
+            poller_handles.push(handle);
+        }
+    }
+}
+
 fn process_event(
     app: &mut App,
     event: AppEvent,
     fs_changed: &mut HashSet<usize>,
     tx: &mpsc::UnboundedSender<AppEvent>,
+    config_saved: &mut bool,
 ) {
     match event {
         AppEvent::FsChanged(idx) => {
@@ -190,6 +237,9 @@ fn process_event(
                     });
                 }
             }
+        }
+        AppEvent::ConfigSaved => {
+            *config_saved = true;
         }
         _ => app.handle_event(event),
     }

@@ -13,8 +13,10 @@ pub const BRANCH_COLORS: &[Color] = &[
 pub const HEAD_COLOR: Color = Color::Green;
 pub const TAG_COLOR: Color = Color::Yellow;
 pub const FORK_DIM: Color = Color::DarkGray;
-pub const SELECTED_BG: Color = Color::Rgb(50, 50, 80);
-pub const UNFOCUSED_SEL_BG: Color = Color::Rgb(38, 38, 55);
+
+pub const APP_BG: Color = Color::Rgb(22, 22, 34);
+pub const SELECTED_BG: Color = Color::Rgb(62, 45, 100);
+pub const UNFOCUSED_SEL_BG: Color = Color::Rgb(42, 35, 65);
 pub const STATUS_BG: Color = Color::Rgb(30, 30, 40);
 pub const ACCENT: Color = Color::Rgb(140, 115, 200);
 pub const HEADER_BG: Color = Color::Rgb(25, 25, 38);
@@ -23,6 +25,10 @@ pub const PANEL_LABEL: Color = Color::Rgb(100, 95, 130);
 pub const FILTER_COLOR: Color = Color::Cyan;
 pub const DIM_TEXT: Color = Color::Rgb(100, 100, 120);
 pub const ACTIVE_BORDER: Color = Color::Rgb(120, 120, 180);
+
+pub const ACTIVE_PANEL_BORDER: Color = Color::Rgb(140, 115, 200);
+pub const INACTIVE_PANEL_BORDER: Color = Color::Rgb(55, 55, 75);
+pub const SELECTED_ACCENT: Color = Color::Rgb(160, 130, 220);
 
 pub const TRUNK_COLORS: &[Color] = &[Color::LightCyan, Color::LightYellow, Color::LightGreen];
 
@@ -51,18 +57,18 @@ pub fn palette_for_mode(mode: &ViewMode) -> ThemePalette {
         ViewMode::Local => ThemePalette {
             chrome_bg: Color::Rgb(25, 25, 38),
             chrome_fg: Color::Rgb(100, 95, 130),
-            content_bg: Color::Rgb(35, 35, 52),
+            content_bg: Color::Rgb(24, 24, 36),
             content_fg: Color::Rgb(220, 220, 230),
-            selected_bg: Color::Rgb(50, 50, 80),
+            selected_bg: Color::Rgb(62, 45, 100),
             header_bg: Color::Rgb(25, 25, 38),
             status_bg: Color::Rgb(30, 30, 40),
         },
         ViewMode::Remote => ThemePalette {
             chrome_bg: Color::Rgb(25, 25, 38),
             chrome_fg: Color::Rgb(100, 95, 130),
-            content_bg: Color::Rgb(18, 18, 28),
+            content_bg: Color::Rgb(20, 20, 30),
             content_fg: Color::Rgb(170, 170, 190),
-            selected_bg: Color::Rgb(40, 40, 65),
+            selected_bg: Color::Rgb(52, 38, 85),
             header_bg: Color::Rgb(25, 25, 38),
             status_bg: Color::Rgb(22, 22, 32),
         },

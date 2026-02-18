@@ -235,7 +235,7 @@ fn build_row_line(
     // Selection indicator (▎ at column 0)
     if selected {
         let indicator_fg = if is_active {
-            theme::ACTIVE_BORDER
+            theme::SELECTED_ACCENT
         } else {
             theme::DIM_TEXT
         };

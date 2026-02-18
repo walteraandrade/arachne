@@ -4,11 +4,12 @@ use crate::ui::theme;
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Widget,
 };
 
+#[allow(dead_code)]
 pub struct DetailPanel<'a> {
     pub row: &'a GraphRow,
     pub focused: bool,
@@ -16,45 +17,18 @@ pub struct DetailPanel<'a> {
 
 impl<'a> Widget for DetailPanel<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        if area.height < 3 || area.width < 10 {
+        if area.height < 1 || area.width < 10 {
             return;
         }
 
-        // Header line
-        let header_fg = if self.focused {
-            theme::ACCENT
-        } else {
-            theme::PANEL_LABEL
-        };
-        let header_style = Style::default()
-            .fg(header_fg)
-            .bg(theme::HEADER_BG)
-            .add_modifier(Modifier::BOLD);
-        for x in area.x..area.right() {
-            buf[(x, area.y)].set_style(Style::default().bg(theme::HEADER_BG));
-        }
-        buf.set_line(
-            area.x,
-            area.y,
-            &Line::from(Span::styled(" Detail", header_style)),
-            area.width,
-        );
-
-        // Separator
-        let sep_style = Style::default().fg(theme::SEPARATOR);
-        for x in area.x..area.right() {
-            buf[(x, area.y + 1)].set_char('\u{2500}');
-            buf[(x, area.y + 1)].set_style(sep_style);
-        }
-
-        let inner_y = area.y + 2;
+        let inner_y = area.y;
         let inner_w = area.width.saturating_sub(1) as usize;
-        let inner_h = area.height.saturating_sub(2) as usize;
+        let inner_h = area.height as usize;
         if inner_h == 0 || inner_w == 0 {
             return;
         }
 
-        let label_style = Style::default().fg(theme::DIM_TEXT);
+        let label_style = Style::default().fg(theme::ACCENT);
         let mut y = inner_y;
         let x = area.x + 1;
 

@@ -1,4 +1,5 @@
 pub mod branch_panel;
+pub mod config_screen;
 pub mod detail_panel;
 pub mod graph_view;
 pub mod header_bar;

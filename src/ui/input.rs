@@ -22,6 +22,7 @@ pub enum Action {
     FilterCancel,
     Refresh,
     Help,
+    OpenConfig,
     ClosePopup,
     Quit,
     None,
@@ -71,6 +72,7 @@ pub fn map_key(key: KeyEvent, filter_mode: FilterMode) -> Action {
         KeyCode::Char('a') => Action::AuthorFilter,
         KeyCode::Char('r') => Action::Refresh,
         KeyCode::Char('?') => Action::Help,
+        KeyCode::Char('c') => Action::OpenConfig,
         KeyCode::Esc => Action::ClosePopup,
         _ => Action::None,
     }

@@ -22,4 +22,5 @@ pub enum AppEvent {
         project_idx: usize,
         result: std::result::Result<RepoData, String>,
     },
+    ConfigSaved,
 }

@@ -19,6 +19,7 @@ const BINDINGS: &[(&str, &str)] = &[
     ("a", "Filter author"),
     ("f", "Toggle forks"),
     ("r", "Refresh"),
+    ("c", "Config screen"),
     ("?", "This help"),
     ("q / Esc", "Quit / Close"),
 ];

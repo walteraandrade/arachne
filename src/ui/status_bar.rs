@@ -102,7 +102,17 @@ impl<'a> Widget for StatusBar<'a> {
         let left_line = Line::from(left_spans);
         buf.set_line(area.x, area.y, &left_line, area.width);
 
-        // Right zone: keybinding hints
+        // Right zone: keybinding hints with ACCENT keys
+        let hint_spans = vec![
+            Span::styled("j", Style::default().fg(theme::ACCENT).bg(theme::STATUS_BG)),
+            Span::styled("/", Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG)),
+            Span::styled("k", Style::default().fg(theme::ACCENT).bg(theme::STATUS_BG)),
+            Span::styled(" scroll  ", Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG)),
+            Span::styled("/", Style::default().fg(theme::ACCENT).bg(theme::STATUS_BG)),
+            Span::styled(" filter  ", Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG)),
+            Span::styled("?", Style::default().fg(theme::ACCENT).bg(theme::STATUS_BG)),
+            Span::styled(" help ", Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG)),
+        ];
         let hints = "j/k scroll  / filter  ? help ";
         let hints_w = UnicodeWidthStr::width(hints);
         let area_w = area.width as usize;
@@ -136,18 +146,12 @@ impl<'a> Widget for StatusBar<'a> {
             }
 
             let hints_x = area.x + (area_w - hints_w) as u16;
-            let hints_span = Span::styled(
-                hints,
-                Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG),
-            );
-            buf.set_line(hints_x, area.y, &Line::from(hints_span), hints_w as u16);
+            let hints_line = Line::from(hint_spans.clone());
+            buf.set_line(hints_x, area.y, &hints_line, hints_w as u16);
         } else if area_w > hints_w {
             let hints_x = area.x + (area_w - hints_w) as u16;
-            let hints_span = Span::styled(
-                hints,
-                Style::default().fg(theme::DIM_TEXT).bg(theme::STATUS_BG),
-            );
-            buf.set_line(hints_x, area.y, &Line::from(hints_span), hints_w as u16);
+            let hints_line = Line::from(hint_spans);
+            buf.set_line(hints_x, area.y, &hints_line, hints_w as u16);
         }
     }
 }
