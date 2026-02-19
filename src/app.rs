@@ -672,7 +672,7 @@ impl App {
                 self.refresh_entries();
             } else if let Some(tip) = entry.tip_oid() {
                 if let Some(proj) = self.projects.get(self.active_project) {
-                    if let Some(idx) = proj.rows.iter().position(|r| r.oid == tip) {
+                    if let Some(idx) = proj.rows.iter().position(|r| r.meta.oid == tip) {
                         self.graph_selected = idx;
                     }
                 }
@@ -865,7 +865,7 @@ impl App {
         if let Some(proj) = self.projects.get(self.active_project) {
             if let Some(row) = proj.rows.get(self.graph_selected) {
                 let detail = DetailPanel {
-                    row,
+                    meta: &row.meta,
                     focused: is_active,
                     palette: &self.palette,
                 };

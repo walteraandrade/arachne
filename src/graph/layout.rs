@@ -8,6 +8,13 @@ fn is_trunk_branch(bi: Option<usize>, trunk_count: usize) -> bool {
     bi.is_some_and(|b| b < trunk_count)
 }
 
+impl GraphRow {
+    pub fn new(layout: RowLayout, meta: RowMeta) -> Self {
+        let cells = rasterize_to_cells(&layout);
+        Self { layout, meta, cells }
+    }
+}
+
 pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]) -> LayoutResult {
     let branch_map = build_branch_map(&repo_data.branches);
     let tag_map = build_tag_map(&repo_data.tags);
@@ -51,33 +58,26 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
         let color = branch_idx.unwrap_or(col + trunk_count);
 
         let num_cols = state.columns.len();
-        let mut cells = Vec::with_capacity(num_cols);
+        let mut passthrough_lanes = Vec::new();
 
         for i in 0..num_cols {
-            if i == col {
-                let mut cell = Cell::new(CellSymbol::Commit, color);
-                if is_trunk {
-                    cell.trunk_index = branch_idx;
+            if i != col {
+                if let Some(slot_oid) = &state.columns[i] {
+                    let ci = commit_branches
+                        .get(slot_oid)
+                        .copied()
+                        .unwrap_or(i + trunk_count);
+                    let ti = if ci < trunk_count { Some(ci) } else { None };
+                    passthrough_lanes.push(LaneOccupant {
+                        lane: i,
+                        color_index: ci,
+                        trunk_index: ti,
+                    });
                 }
-                cells.push(cell);
-            } else if state.columns[i].is_some() {
-                let slot_oid = state.columns[i].as_ref().unwrap();
-                let ci = commit_branches
-                    .get(slot_oid)
-                    .copied()
-                    .unwrap_or(i + trunk_count);
-                let mut cell = Cell::new(CellSymbol::Vertical, ci);
-                if ci < trunk_count {
-                    cell.trunk_index = Some(ci);
-                }
-                cells.push(cell);
-            } else {
-                cells.push(Cell::empty());
             }
         }
 
-        // Compute lane_branches from current state columns
-        let lane_branches: Vec<Option<usize>> = (0..cells.len())
+        let lane_branches: Vec<Option<usize>> = (0..num_cols)
             .map(|i| {
                 if i == col {
                     branch_idx
@@ -95,19 +95,28 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
 
         state.columns[col] = None;
 
+        let mut edges = Vec::new();
+
         if !parents.is_empty() {
             let first_parent = &parents[0];
             let parent_branch = commit_branches.get(first_parent).copied();
             let parent_is_trunk = is_trunk_branch(parent_branch, trunk_count);
 
             if let Some(existing_col) = state.find_column(first_parent) {
-                add_merge_cells(&mut cells, col, existing_col, color);
+                edges.push(Edge {
+                    from_lane: col,
+                    to_lane: existing_col,
+                    kind: EdgeKind::MergeToParent { color_index: color },
+                });
             } else if let Some(lane) = parent_branch.filter(|_| parent_is_trunk) {
                 if state.columns[lane].is_none() {
                     state.columns[lane] = Some(*first_parent);
                     if lane != col {
-                        extend_cells(&mut cells, lane + 1);
-                        add_merge_cells(&mut cells, col, lane, color);
+                        edges.push(Edge {
+                            from_lane: col,
+                            to_lane: lane,
+                            kind: EdgeKind::MergeToParent { color_index: color },
+                        });
                     }
                 } else {
                     state.columns[col] = Some(*first_parent);
@@ -118,7 +127,11 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
 
             for parent in parents.iter().skip(1) {
                 if let Some(pcol) = state.find_column(parent) {
-                    add_branch_cells(&mut cells, col, pcol);
+                    edges.push(Edge {
+                        from_lane: col,
+                        to_lane: pcol,
+                        kind: EdgeKind::BranchToParent,
+                    });
                 } else {
                     let p_branch = commit_branches.get(parent).copied();
                     let p_is_trunk = is_trunk_branch(p_branch, trunk_count);
@@ -133,8 +146,11 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
                     } else {
                         state.allocate_column_nonreserved(*parent)
                     };
-                    extend_cells(&mut cells, state.columns.len());
-                    add_branch_cells(&mut cells, col, new_col);
+                    edges.push(Edge {
+                        from_lane: col,
+                        to_lane: new_col,
+                        kind: EdgeKind::BranchToParent,
+                    });
                 }
             }
         }
@@ -145,8 +161,17 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
         let tag_names = tag_map.get(oid).cloned().unwrap_or_default();
         let is_head = head_oid == Some(oid);
 
-        rows.push(GraphRow {
-            cells,
+        let trunk_idx = if is_trunk { branch_idx } else { None };
+
+        let layout = RowLayout {
+            commit_lane: col,
+            commit_color: color,
+            trunk_index: trunk_idx,
+            edges,
+            passthrough_lanes,
+            lane_branches,
+        };
+        let meta = RowMeta {
             oid: *oid,
             message: node.commit.message.clone(),
             author: node.commit.author.clone(),
@@ -155,11 +180,11 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
             branch_names,
             tag_names,
             is_head,
-            lane_branches,
             branch_index: branch_idx,
             is_merge,
             is_fork_point,
-        });
+        };
+        rows.push(GraphRow::new(layout, meta));
     }
 
     LayoutResult {
@@ -247,6 +272,45 @@ fn build_tag_map(tags: &[TagInfo]) -> HashMap<Oid, Vec<String>> {
         map.entry(t.target).or_default().push(t.name.clone());
     }
     map
+}
+
+pub fn rasterize_to_cells(layout: &RowLayout) -> Vec<Cell> {
+    let num_lanes = layout
+        .passthrough_lanes
+        .iter()
+        .map(|p| p.lane + 1)
+        .chain(layout.edges.iter().map(|e| e.from_lane.max(e.to_lane) + 1))
+        .max()
+        .unwrap_or(0)
+        .max(layout.commit_lane + 1);
+
+    let mut cells = vec![Cell::empty(); num_lanes];
+
+    // Place commit cell
+    let mut commit_cell = Cell::new(CellSymbol::Commit, layout.commit_color);
+    commit_cell.trunk_index = layout.trunk_index;
+    cells[layout.commit_lane] = commit_cell;
+
+    // Place passthrough vertical cells
+    for pt in &layout.passthrough_lanes {
+        let mut cell = Cell::new(CellSymbol::Vertical, pt.color_index);
+        cell.trunk_index = pt.trunk_index;
+        cells[pt.lane] = cell;
+    }
+
+    // Apply edges
+    for edge in &layout.edges {
+        match edge.kind {
+            EdgeKind::MergeToParent { color_index } => {
+                add_merge_cells(&mut cells, edge.from_lane, edge.to_lane, color_index);
+            }
+            EdgeKind::BranchToParent => {
+                add_branch_cells(&mut cells, edge.from_lane, edge.to_lane);
+            }
+        }
+    }
+
+    cells
 }
 
 fn duration_bucket(time: &chrono::DateTime<chrono::Utc>) -> (i64, &'static str) {
@@ -433,7 +497,7 @@ mod tests {
         let rows = compute_layout(&dag, &data, &trunk).rows;
 
         // feature branch commit should not be in reserved lane 0
-        let feat_row = rows.iter().find(|r| r.oid == make_oid(2)).unwrap();
+        let feat_row = rows.iter().find(|r| r.meta.oid == make_oid(2)).unwrap();
         let commit_col = feat_row
             .cells
             .iter()
@@ -537,10 +601,10 @@ mod tests {
         let rows = compute_layout(&dag, &data, &trunk).rows;
 
         // feat/x row should have lane_branches with both lanes active
-        let feat_row = rows.iter().find(|r| r.oid == make_oid(2)).unwrap();
-        assert!(!feat_row.lane_branches.is_empty());
+        let feat_row = rows.iter().find(|r| r.meta.oid == make_oid(2)).unwrap();
+        assert!(!feat_row.layout.lane_branches.is_empty());
         // at least one lane should be assigned
-        assert!(feat_row.lane_branches.iter().any(|lb| lb.is_some()));
+        assert!(feat_row.layout.lane_branches.iter().any(|lb| lb.is_some()));
     }
 
     #[test]
@@ -553,13 +617,68 @@ mod tests {
         ];
         let rows = layout_from_commits(commits);
 
-        let merge_row = rows.iter().find(|r| r.oid == make_oid(1)).unwrap();
-        assert!(merge_row.is_merge);
-        assert!(!merge_row.is_fork_point); // only 0 children
+        let merge_row = rows.iter().find(|r| r.meta.oid == make_oid(1)).unwrap();
+        assert!(merge_row.meta.is_merge);
+        assert!(!merge_row.meta.is_fork_point); // only 0 children
 
-        let fork_row = rows.iter().find(|r| r.oid == make_oid(4)).unwrap();
-        assert!(fork_row.is_fork_point);
-        assert!(!fork_row.is_merge);
+        let fork_row = rows.iter().find(|r| r.meta.oid == make_oid(4)).unwrap();
+        assert!(fork_row.meta.is_fork_point);
+        assert!(!fork_row.meta.is_merge);
+    }
+
+    #[test]
+    fn merge_produces_edges() {
+        let commits = vec![
+            make_commit(1, vec![2, 3], 10),
+            make_commit(2, vec![4], 20),
+            make_commit(3, vec![4], 25),
+            make_commit(4, vec![], 30),
+        ];
+        let rows = layout_from_commits(commits);
+        let merge_row = rows.iter().find(|r| r.meta.oid == make_oid(1)).unwrap();
+        assert!(!merge_row.layout.edges.is_empty());
+        assert!(merge_row
+            .layout
+            .edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::BranchToParent));
+    }
+
+    #[test]
+    fn rasterize_round_trip() {
+        let commits = vec![
+            make_commit(1, vec![2, 3], 10),
+            make_commit(2, vec![4], 20),
+            make_commit(3, vec![4], 25),
+            make_commit(4, vec![], 30),
+        ];
+        let rows = layout_from_commits(commits);
+        for row in &rows {
+            let rasterized = rasterize_to_cells(&row.layout);
+            assert_eq!(
+                rasterized.len(),
+                row.cells.len(),
+                "cell count mismatch for oid {:?}",
+                row.meta.oid,
+            );
+            for (i, (orig, rast)) in row.cells.iter().zip(rasterized.iter()).enumerate() {
+                assert_eq!(
+                    orig.symbol, rast.symbol,
+                    "symbol mismatch at cell {i} for oid {:?}",
+                    row.meta.oid,
+                );
+                assert_eq!(
+                    orig.color_index, rast.color_index,
+                    "color mismatch at cell {i} for oid {:?}",
+                    row.meta.oid,
+                );
+                assert_eq!(
+                    orig.trunk_index, rast.trunk_index,
+                    "trunk_index mismatch at cell {i} for oid {:?}",
+                    row.meta.oid,
+                );
+            }
+        }
     }
 
     #[test]
@@ -578,9 +697,49 @@ mod tests {
         let trunk = vec!["main".to_string()];
         let rows = compute_layout(&dag, &data, &trunk).rows;
 
-        // commit cell on trunk should have trunk_index
         let commit_cell = &rows[0].cells[0];
         assert_eq!(commit_cell.symbol, CellSymbol::Commit);
         assert_eq!(commit_cell.trunk_index, Some(0));
+    }
+
+    #[test]
+    fn rasterize_round_trip_with_trunk() {
+        let commits = vec![
+            make_commit(1, vec![3], 10),
+            make_commit(2, vec![3], 15),
+            make_commit(3, vec![], 20),
+        ];
+        let data = make_repo_data(
+            commits,
+            vec![
+                BranchInfo {
+                    name: "main".to_string(),
+                    tip: make_oid(1),
+                    is_head: true,
+                    source: CommitSource::Local,
+                },
+                BranchInfo {
+                    name: "feat/x".to_string(),
+                    tip: make_oid(2),
+                    is_head: false,
+                    source: CommitSource::Local,
+                },
+            ],
+        );
+        let dag = Dag::from_repo_data(&data);
+        let trunk = vec!["main".to_string()];
+        let rows = compute_layout(&dag, &data, &trunk).rows;
+
+        for row in &rows {
+            let rasterized = rasterize_to_cells(&row.layout);
+            assert_eq!(rasterized.len(), row.cells.len());
+            for (i, (orig, rast)) in row.cells.iter().zip(rasterized.iter()).enumerate() {
+                assert_eq!(
+                    orig.symbol, rast.symbol,
+                    "symbol mismatch at cell {i} for oid {:?}",
+                    row.meta.oid,
+                );
+            }
+        }
     }
 }

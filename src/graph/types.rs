@@ -41,8 +41,37 @@ impl Cell {
 }
 
 #[derive(Clone, Debug)]
-pub struct GraphRow {
-    pub cells: Vec<Cell>,
+pub struct Edge {
+    pub from_lane: usize,
+    pub to_lane: usize,
+    pub kind: EdgeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EdgeKind {
+    MergeToParent { color_index: usize },
+    BranchToParent,
+}
+
+#[derive(Clone, Debug)]
+pub struct LaneOccupant {
+    pub lane: usize,
+    pub color_index: usize,
+    pub trunk_index: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RowLayout {
+    pub commit_lane: usize,
+    pub commit_color: usize,
+    pub trunk_index: Option<usize>,
+    pub edges: Vec<Edge>,
+    pub passthrough_lanes: Vec<LaneOccupant>,
+    pub lane_branches: Vec<Option<usize>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RowMeta {
     pub oid: Oid,
     pub message: String,
     pub author: String,
@@ -51,10 +80,16 @@ pub struct GraphRow {
     pub branch_names: Vec<String>,
     pub tag_names: Vec<String>,
     pub is_head: bool,
-    pub lane_branches: Vec<Option<usize>>,
     pub branch_index: Option<usize>,
     pub is_merge: bool,
     pub is_fork_point: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphRow {
+    pub layout: RowLayout,
+    pub meta: RowMeta,
+    pub cells: Vec<Cell>,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +134,7 @@ impl LayoutState {
             self.columns[idx] = Some(oid);
             idx
         } else if self.columns.len() >= MAX_LANES {
+            debug_assert!(false, "MAX_LANES exceeded; overwriting last column");
             let last = self.columns.len() - 1;
             self.columns[last] = Some(oid);
             last

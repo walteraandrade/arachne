@@ -1,5 +1,5 @@
 use crate::graph::layout::format_time_ago;
-use crate::graph::types::GraphRow;
+use crate::graph::types::RowMeta;
 use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
@@ -11,7 +11,7 @@ use ratatui::{
 
 #[allow(dead_code)]
 pub struct DetailPanel<'a> {
-    pub row: &'a GraphRow,
+    pub meta: &'a RowMeta,
     pub focused: bool,
     pub palette: &'a ThemePalette,
 }
@@ -37,7 +37,7 @@ impl<'a> Widget for DetailPanel<'a> {
         if (y - inner_y) as usize >= inner_h {
             return;
         }
-        let sha = &self.row.oid.to_string()[..8.min(self.row.oid.to_string().len())];
+        let sha = &self.meta.oid.to_string()[..8.min(self.meta.oid.to_string().len())];
         buf.set_line(
             x,
             y,
@@ -57,7 +57,7 @@ impl<'a> Widget for DetailPanel<'a> {
             y,
             &Line::from(vec![
                 Span::styled("Author ", label_style),
-                Span::raw(self.row.author.as_str()),
+                Span::raw(self.meta.author.as_str()),
             ]),
             inner_w as u16,
         );
@@ -66,7 +66,7 @@ impl<'a> Widget for DetailPanel<'a> {
         if (y - inner_y) as usize >= inner_h {
             return;
         }
-        let time_ago = format_time_ago(&self.row.time);
+        let time_ago = format_time_ago(&self.meta.time);
         buf.set_line(
             x,
             y,
@@ -78,27 +78,27 @@ impl<'a> Widget for DetailPanel<'a> {
         );
         y += 1;
 
-        if !self.row.branch_names.is_empty() && ((y - inner_y) as usize) < inner_h {
+        if !self.meta.branch_names.is_empty() && ((y - inner_y) as usize) < inner_h {
             buf.set_line(
                 x,
                 y,
                 &Line::from(vec![
                     Span::styled("Refs ", label_style),
-                    Span::raw(self.row.branch_names.join(", ")),
+                    Span::raw(self.meta.branch_names.join(", ")),
                 ]),
                 inner_w as u16,
             );
             y += 1;
         }
 
-        if !self.row.tag_names.is_empty() && ((y - inner_y) as usize) < inner_h {
+        if !self.meta.tag_names.is_empty() && ((y - inner_y) as usize) < inner_h {
             buf.set_line(
                 x,
                 y,
                 &Line::from(vec![
                     Span::styled("Tags ", label_style),
                     Span::styled(
-                        self.row.tag_names.join(", "),
+                        self.meta.tag_names.join(", "),
                         Style::default().fg(p.tag_color),
                     ),
                 ]),
@@ -112,7 +112,7 @@ impl<'a> Widget for DetailPanel<'a> {
         }
         let remaining = inner_h.saturating_sub((y - inner_y) as usize);
         if remaining > 0 {
-            for (i, line) in self.row.message.lines().enumerate() {
+            for (i, line) in self.meta.message.lines().enumerate() {
                 if i >= remaining {
                     break;
                 }

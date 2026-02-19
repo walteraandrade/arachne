@@ -47,8 +47,8 @@ impl Project {
 pub fn build_time_sorted_indices(rows: &[GraphRow]) -> Vec<usize> {
     let mut indices: Vec<usize> = (0..rows.len()).collect();
     indices.sort_by(|&a, &b| {
-        let ta = rows.get(a).map(|r| &r.time);
-        let tb = rows.get(b).map(|r| &r.time);
+        let ta = rows.get(a).map(|r| &r.meta.time);
+        let tb = rows.get(b).map(|r| &r.meta.time);
         tb.cmp(&ta)
     });
     indices

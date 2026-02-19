@@ -95,7 +95,7 @@ impl<'a> Widget for GraphView<'a> {
 
             let abs_idx = self.scroll_y + i;
             let is_selected = abs_idx == self.selected;
-            let is_highlighted = self.highlighted_oids.contains(&row.oid);
+            let is_highlighted = self.highlighted_oids.contains(&row.meta.oid);
 
             let line = build_row_line(
                 row,
@@ -143,7 +143,7 @@ fn render_lane_header(
     }
 
     let lane_branches = match first_visible_row {
-        Some(row) => &row.lane_branches,
+        Some(row) => &row.layout.lane_branches,
         None => return,
     };
 
@@ -225,7 +225,7 @@ fn build_row_line(
 ) -> Line<'static> {
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
     let mut text_spans: Vec<Span<'static>> = Vec::new();
-    let is_fork = matches!(row.source, CommitSource::Fork(_));
+    let is_fork = matches!(row.meta.source, CommitSource::Fork(_));
     let sel_bg = if is_active {
         palette.selected_bg
     } else {
@@ -268,7 +268,7 @@ fn build_row_line(
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
 
-    let time_str = format_time_short(&row.time);
+    let time_str = format_time_short(&row.meta.time);
     let time_col_w = 5;
     let mut budget = avail_width
         .saturating_sub(graph_width)
@@ -277,12 +277,12 @@ fn build_row_line(
     let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
     let max_branches = 2;
     let mut showed_branch_label = false;
-    for (i, name) in row.branch_names.iter().enumerate() {
+    for (i, name) in row.meta.branch_names.iter().enumerate() {
         if i >= max_branches || budget < 4 {
             break;
         }
         let max_label = budget.min(20);
-        let is_head_branch = row.is_head && i == 0;
+        let is_head_branch = row.meta.is_head && i == 0;
         let prefix = if is_head_branch { "*" } else { "" };
         let display = format!("{prefix}{name}");
         let label = truncate_with_ellipsis(&display, max_label.saturating_sub(3));
@@ -296,7 +296,7 @@ fn build_row_line(
         showed_branch_label = true;
     }
 
-    let overflow = row.branch_names.len().saturating_sub(max_branches);
+    let overflow = row.meta.branch_names.len().saturating_sub(max_branches);
     if overflow > 0 && budget >= 5 {
         let overflow_str = format!("[+{overflow}] ");
         let w = UnicodeWidthStr::width(overflow_str.as_str());
@@ -308,8 +308,8 @@ fn build_row_line(
         showed_branch_label = true;
     }
 
-    if !showed_branch_label && (row.is_merge || row.is_fork_point) {
-        if let Some(bi) = row.branch_index {
+    if !showed_branch_label && (row.meta.is_merge || row.meta.is_fork_point) {
+        if let Some(bi) = row.meta.branch_index {
             if let Some(name) = branch_index_to_name.get(&bi) {
                 let max_label = budget.min(18);
                 if max_label >= 4 {
@@ -325,7 +325,7 @@ fn build_row_line(
         }
     }
 
-    let author_str = format!(" {}", row.author);
+    let author_str = format!(" {}", row.meta.author);
     let author_w = UnicodeWidthStr::width(author_str.as_str());
     let msg_budget = if budget > author_w + 5 {
         budget - author_w
@@ -334,7 +334,7 @@ fn build_row_line(
     };
 
     if msg_budget > 0 {
-        let msg = truncate_with_ellipsis(&row.message, msg_budget);
+        let msg = truncate_with_ellipsis(&row.meta.message, msg_budget);
         let msg_w = UnicodeWidthStr::width(msg.as_str());
         let msg_style = if selected {
             Style::default().bg(sel_bg)
@@ -347,7 +347,7 @@ fn build_row_line(
         budget = budget.saturating_sub(msg_w);
     }
 
-    if budget >= author_w && !row.author.is_empty() {
+    if budget >= author_w && !row.meta.author.is_empty() {
         let style = if selected {
             Style::default().fg(palette.dim_text).bg(sel_bg)
         } else {
@@ -357,7 +357,7 @@ fn build_row_line(
         budget = budget.saturating_sub(author_w);
     }
 
-    for name in &row.tag_names {
+    for name in &row.meta.tag_names {
         let formatted = format!("({name}) ");
         let w = UnicodeWidthStr::width(formatted.as_str());
         if budget < w {
