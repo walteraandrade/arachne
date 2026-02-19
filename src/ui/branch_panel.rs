@@ -1,6 +1,6 @@
 use crate::git::types::{CommitSource, Oid};
 use crate::project::Project;
-use crate::ui::theme;
+use crate::ui::theme::{self, ThemePalette};
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -69,6 +69,7 @@ pub struct BranchPanel<'a> {
     pub selected: usize,
     pub scroll: usize,
     pub focused: bool,
+    pub palette: &'a ThemePalette,
 }
 
 impl<'a> Widget for BranchPanel<'a> {
@@ -77,14 +78,15 @@ impl<'a> Widget for BranchPanel<'a> {
             return;
         }
 
+        let p = self.palette;
         let inner_y = area.y;
         let inner_w = area.width as usize;
         let visible = area.height as usize;
 
         let sel_bg = if self.focused {
-            theme::SELECTED_BG
+            p.selected_bg
         } else {
-            theme::UNFOCUSED_SEL_BG
+            p.unfocused_sel_bg
         };
 
         for (i, entry) in self
@@ -98,7 +100,7 @@ impl<'a> Widget for BranchPanel<'a> {
             let abs_idx = self.scroll + i;
             let is_selected = abs_idx == self.selected;
 
-            let line = entry_line(entry, is_selected, inner_w, self.focused);
+            let line = entry_line(entry, is_selected, inner_w, self.focused, p);
             buf.set_line(area.x, y, &line, area.width);
 
             if is_selected {
@@ -131,7 +133,6 @@ pub fn build_entries(
         let branches = &proj.repo_data.branches;
         let tags = &proj.repo_data.tags;
 
-        // Local branches
         let local: Vec<_> = branches
             .iter()
             .filter(|b| matches!(b.source, CommitSource::Local) && !b.name.contains('/'))
@@ -264,7 +265,7 @@ pub fn build_entries(
             }
         }
 
-        // Tags (sorted by recency from repo, limited to 10)
+        // Tags
         let filtered_tags: Vec<_> = tags
             .iter()
             .filter(|t| filter.is_empty() || t.name.contains(filter))
@@ -288,10 +289,7 @@ pub fn build_entries(
             let count = filtered_tags.len().min(10);
             entries.push(DisplayEntry {
                 label: format!("  {arrow} Tags"),
-                kind: EntryKind::SectionHeader {
-                    key,
-                    count,
-                },
+                kind: EntryKind::SectionHeader { key, count },
             });
             if !is_collapsed {
                 for t in filtered_tags.iter().take(10) {
@@ -346,30 +344,36 @@ fn truncate_right(s: &str, max_width: usize) -> String {
     format!("{}\u{2026}", &s[..end_byte])
 }
 
-fn section_header_line(label: &str, count: usize, selected: bool, width: usize) -> Line<'static> {
+fn section_header_line(
+    label: &str,
+    count: usize,
+    selected: bool,
+    width: usize,
+    p: &ThemePalette,
+) -> Line<'static> {
     let bold_style = if selected {
         Style::default()
-            .fg(theme::SECTION_HEADER_FG)
-            .bg(theme::SELECTED_BG)
+            .fg(p.section_header_fg)
+            .bg(p.selected_bg)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .fg(theme::SECTION_HEADER_FG)
+            .fg(p.section_header_fg)
             .add_modifier(Modifier::BOLD)
     };
 
     let dim_style = if selected {
-        Style::default().fg(theme::ACCENT).bg(theme::SELECTED_BG)
+        Style::default().fg(p.accent).bg(p.selected_bg)
     } else {
-        Style::default().fg(theme::ACCENT)
+        Style::default().fg(p.accent)
     };
 
     let sep_style = if selected {
         Style::default()
-            .fg(theme::SECTION_SEPARATOR)
-            .bg(theme::SELECTED_BG)
+            .fg(p.section_separator)
+            .bg(p.selected_bg)
     } else {
-        Style::default().fg(theme::SECTION_SEPARATOR)
+        Style::default().fg(p.section_separator)
     };
 
     let text_part = format!("{label} ({count})");
@@ -400,16 +404,16 @@ fn entry_line(
     selected: bool,
     max_width: usize,
     _focused: bool,
+    p: &ThemePalette,
 ) -> Line<'static> {
     if matches!(entry.kind, EntryKind::Spacer) {
         return Line::from("");
     }
 
     if let EntryKind::SectionHeader { count, .. } = &entry.kind {
-        return section_header_line(&entry.label, *count, selected, max_width);
+        return section_header_line(&entry.label, *count, selected, max_width, p);
     }
 
-    // Two-tone branch names for branch entries
     let is_branch = matches!(
         entry.kind,
         EntryKind::LocalBranch { is_head: false, .. } | EntryKind::ForkBranch { .. }
@@ -426,16 +430,12 @@ fn entry_line(
         let indent = &label[..label.len() - trimmed.len()];
 
         let base_color = if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
-            theme::FORK_DIM
+            p.fork_dim
         } else {
             theme::branch_prefix_color(trimmed)
         };
 
-        let bg = if selected {
-            Some(theme::SELECTED_BG)
-        } else {
-            None
-        };
+        let bg = if selected { Some(p.selected_bg) } else { None };
 
         let mut indent_style = Style::default();
         if let Some(b) = bg {
@@ -443,7 +443,7 @@ fn entry_line(
         }
 
         if let Some((prefix, rest)) = split_branch_prefix(trimmed) {
-            let mut prefix_style = Style::default().fg(theme::DIM_PREFIX);
+            let mut prefix_style = Style::default().fg(p.dim_prefix);
             let mut name_style = Style::default().fg(base_color);
             if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
                 prefix_style = prefix_style.add_modifier(Modifier::ITALIC);
@@ -473,21 +473,20 @@ fn entry_line(
         ]);
     }
 
-    // HEAD branch, repo header, tags — single style
     let style = match &entry.kind {
         EntryKind::RepoHeader => Style::default()
-            .fg(theme::ACTIVE_BORDER)
+            .fg(p.active_border)
             .add_modifier(Modifier::BOLD),
         EntryKind::LocalBranch { is_head: true, .. } => Style::default()
-            .fg(theme::HEAD_COLOR)
+            .fg(p.head_color)
             .add_modifier(Modifier::BOLD),
-        EntryKind::Tag { .. } => Style::default().fg(theme::TAG_COLOR),
-        EntryKind::Author { .. } => Style::default().fg(theme::ACCENT),
+        EntryKind::Tag { .. } => Style::default().fg(p.tag_color),
+        EntryKind::Author { .. } => Style::default().fg(p.accent),
         _ => Style::default(),
     };
 
     let style = if selected {
-        style.bg(theme::SELECTED_BG)
+        style.bg(p.selected_bg)
     } else {
         style
     };

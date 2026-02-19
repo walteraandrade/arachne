@@ -17,7 +17,7 @@ use crate::ui::{
     help_panel::HelpPanel,
     input::{self, Action, FilterMode},
     status_bar::StatusBar,
-    theme,
+    theme::{self, ThemePalette, THEME_NAMES},
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -61,11 +61,13 @@ pub struct App {
     pub notification: Option<Notification>,
     cached_entries: Vec<DisplayEntry>,
 
+    pub palette: ThemePalette,
     pub should_quit: bool,
 }
 
 impl App {
     pub fn new(config: Config) -> Self {
+        let palette = theme::palette_for_theme(config.theme.as_deref());
         Self {
             config,
             projects: Vec::new(),
@@ -87,6 +89,7 @@ impl App {
             collapsed_sections: HashSet::new(),
             notification: None,
             cached_entries: Vec::new(),
+            palette,
             should_quit: false,
         }
     }
@@ -310,6 +313,7 @@ impl App {
     fn handle_config_action(&mut self, action: ConfigAction) {
         match action {
             ConfigAction::Close => {
+                self.palette = theme::palette_for_theme(self.config.theme.as_deref());
                 self.screen = Screen::Graph;
             }
             ConfigAction::Save => {
@@ -321,6 +325,7 @@ impl App {
                     }
                     let was_first_launch = state.first_launch;
                     self.config = new_config;
+                    self.palette = theme::palette_for_theme(self.config.theme.as_deref());
                     self.screen = Screen::Graph;
                     if was_first_launch {
                         let _ = self.load_repos();
@@ -329,6 +334,15 @@ impl App {
                         }
                     }
                     self.notify(NotifyLevel::Info, "config saved");
+                }
+            }
+            ConfigAction::SelectTheme => {
+                if let Screen::Config(ref mut state) = self.screen {
+                    let idx = state.cursor.min(THEME_NAMES.len().saturating_sub(1));
+                    let name = THEME_NAMES[idx];
+                    state.draft.theme = Some(name.to_string());
+                    state.dirty = true;
+                    self.palette = theme::palette_for_theme(Some(name));
                 }
             }
             ConfigAction::Quit | ConfigAction::QuitConfirm => {
@@ -610,7 +624,7 @@ impl App {
             Action::Help => self.show_help = !self.show_help,
             Action::OpenConfig => {
                 let state = ConfigScreenState::new(&self.config);
-                self.screen = Screen::Config(state);
+                self.screen = Screen::Config(Box::new(state));
             }
             Action::ClosePopup => {
                 if self.show_help {
@@ -671,8 +685,7 @@ impl App {
     pub fn render(&mut self, frame: &mut Frame) {
         let size = frame.area();
 
-        // Fill entire terminal with APP_BG
-        let bg_style = Style::default().bg(theme::APP_BG);
+        let bg_style = Style::default().bg(self.palette.app_bg);
         for y in size.y..size.bottom() {
             for x in size.x..size.right() {
                 frame.buffer_mut()[(x, y)].set_style(bg_style);
@@ -682,7 +695,10 @@ impl App {
         match &self.screen {
             Screen::Graph => self.render_graph_screen(frame, size),
             Screen::Config(state) => {
-                let widget = ConfigScreen { state };
+                let widget = ConfigScreen {
+                    state,
+                    palette: &self.palette,
+                };
                 frame.render_widget(widget, size);
             }
         }
@@ -724,7 +740,6 @@ impl App {
         let branch_area = body_chunks[0];
         let graph_area = body_chunks[1];
 
-        // Render bordered panels
         self.render_bordered_branch_panel(frame, branch_area);
         self.render_bordered_graph_panel(frame, graph_area);
 
@@ -741,14 +756,14 @@ impl App {
     fn render_bordered_branch_panel(&mut self, frame: &mut Frame, area: Rect) {
         let is_active = self.active_panel == Panel::Branches;
         let border_color = if is_active {
-            theme::ACTIVE_PANEL_BORDER
+            self.palette.active_panel_border
         } else {
-            theme::INACTIVE_PANEL_BORDER
+            self.palette.inactive_panel_border
         };
         let title_color = if is_active {
-            theme::ACCENT
+            self.palette.accent
         } else {
-            theme::PANEL_LABEL
+            self.palette.panel_label
         };
 
         let block = Block::default()
@@ -778,6 +793,7 @@ impl App {
             selected: self.branch_selected,
             scroll: self.branch_scroll,
             focused: is_active,
+            palette: &self.palette,
         };
         frame.render_widget(branch_panel, inner);
     }
@@ -785,9 +801,9 @@ impl App {
     fn render_bordered_graph_panel(&mut self, frame: &mut Frame, area: Rect) {
         let is_active = self.active_panel == Panel::Graph;
         let border_color = if is_active {
-            theme::ACTIVE_PANEL_BORDER
+            self.palette.active_panel_border
         } else {
-            theme::INACTIVE_PANEL_BORDER
+            self.palette.inactive_panel_border
         };
 
         let block = Block::default()
@@ -796,13 +812,16 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let visible_height = (inner.height as usize).saturating_sub(1); // -1 for lane header
+        let visible_height = (inner.height as usize).saturating_sub(1);
         self.ensure_scroll_bounds(visible_height);
 
         let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
 
         if let Some(proj) = self.projects.get(self.active_project) {
-            let palette = theme::palette_for_mode(&proj.active_mode);
+            let palette = match proj.active_mode {
+                ViewMode::Remote => self.palette.with_remote_tint(),
+                ViewMode::Local => self.palette.clone(),
+            };
             let graph_view = GraphView {
                 rows: &proj.rows,
                 scroll_y: self.graph_scroll_y,
@@ -821,14 +840,14 @@ impl App {
     fn render_bordered_detail_panel(&self, frame: &mut Frame, area: Rect) {
         let is_active = self.active_panel == Panel::Detail;
         let border_color = if is_active {
-            theme::ACTIVE_PANEL_BORDER
+            self.palette.active_panel_border
         } else {
-            theme::INACTIVE_PANEL_BORDER
+            self.palette.inactive_panel_border
         };
         let title_color = if is_active {
-            theme::ACCENT
+            self.palette.accent
         } else {
-            theme::PANEL_LABEL
+            self.palette.panel_label
         };
 
         let block = Block::default()
@@ -848,6 +867,7 @@ impl App {
                 let detail = DetailPanel {
                     row,
                     focused: is_active,
+                    palette: &self.palette,
                 };
                 frame.render_widget(detail, inner);
             }
@@ -872,6 +892,7 @@ impl App {
             view_mode,
             project_count,
             active_project_idx: self.active_project,
+            palette: &self.palette,
         };
         frame.render_widget(header, area);
     }
@@ -908,16 +929,23 @@ impl App {
             loading_message: loading_msg,
             commit_count,
             branch_count,
+            palette: &self.palette,
         };
         frame.render_widget(status, area);
     }
 
     fn render_overlays(&self, frame: &mut Frame, size: Rect) {
         if self.show_help {
-            frame.render_widget(HelpPanel, size);
+            frame.render_widget(HelpPanel { palette: &self.palette }, size);
         }
         if let Some(ref n) = self.notification {
-            frame.render_widget(crate::ui::toast::Toast { notification: n }, size);
+            frame.render_widget(
+                crate::ui::toast::Toast {
+                    notification: n,
+                    palette: &self.palette,
+                },
+                size,
+            );
         }
     }
 

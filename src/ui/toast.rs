@@ -1,4 +1,4 @@
-use crate::ui::theme;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -25,11 +25,11 @@ impl NotifyLevel {
         }
     }
 
-    fn color(&self) -> Color {
+    pub fn color(&self, palette: &ThemePalette) -> Color {
         match self {
-            NotifyLevel::Error => theme::ERROR_FG,
-            NotifyLevel::Warn => theme::WARN_FG,
-            NotifyLevel::Info => theme::ACCENT,
+            NotifyLevel::Error => palette.error_fg,
+            NotifyLevel::Warn => palette.warn_fg,
+            NotifyLevel::Info => palette.accent,
         }
     }
 }
@@ -43,6 +43,7 @@ pub struct Notification {
 
 pub struct Toast<'a> {
     pub notification: &'a Notification,
+    pub palette: &'a ThemePalette,
 }
 
 impl<'a> Widget for Toast<'a> {
@@ -62,7 +63,7 @@ impl<'a> Widget for Toast<'a> {
 
         Clear.render(toast_area, buf);
 
-        let color = self.notification.level.color();
+        let color = self.notification.level.color(self.palette);
 
         let block = Block::default()
             .borders(Borders::ALL)

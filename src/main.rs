@@ -49,7 +49,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new(config);
 
     if is_first_launch {
-        app.screen = Screen::Config(ConfigScreenState::first_launch(&app.config));
+        app.screen = Screen::Config(Box::new(ConfigScreenState::first_launch(&app.config)));
     } else if let Err(e) = app.load_repos() {
         eprintln!("Error: {e}");
         std::process::exit(1);

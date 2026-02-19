@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::ui::theme::THEME_NAMES;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,7 +118,10 @@ impl ConfigScreenState {
                 self.cursor = self.cursor.saturating_sub(1);
                 ConfigAction::None
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if self.active_section == ConfigSection::Theme {
+                    return ConfigAction::SelectTheme;
+                }
                 self.start_edit();
                 ConfigAction::None
             }
@@ -211,7 +215,7 @@ impl ConfigScreenState {
         match self.active_section {
             ConfigSection::Repos => self.draft.resolved_repos().len(),
             ConfigSection::Trunk => self.draft.trunk_branches.len(),
-            ConfigSection::Theme => 5,
+            ConfigSection::Theme => THEME_NAMES.len(),
             ConfigSection::Profiles => self.draft.profiles.len().max(1),
         }
     }
@@ -235,9 +239,10 @@ pub enum ConfigAction {
     QuitConfirm,
     AddItem,
     RemoveItem,
+    SelectTheme,
 }
 
 pub enum Screen {
     Graph,
-    Config(ConfigScreenState),
+    Config(Box<ConfigScreenState>),
 }

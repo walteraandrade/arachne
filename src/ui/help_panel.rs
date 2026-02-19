@@ -1,4 +1,4 @@
-use crate::ui::theme;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -24,17 +24,20 @@ const BINDINGS: &[(&str, &str)] = &[
     ("q / Esc", "Quit / Close"),
 ];
 
-pub struct HelpPanel;
+pub struct HelpPanel<'a> {
+    pub palette: &'a ThemePalette,
+}
 
-impl Widget for HelpPanel {
+impl<'a> Widget for HelpPanel<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
+        let p = self.palette;
         let popup = super::centered_rect(50, 60, area);
         Clear.render(popup, buf);
 
         let block = Block::default()
             .title(" Keybindings ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::ACCENT));
+            .border_style(Style::default().fg(p.accent));
         let inner = block.inner(popup);
         block.render(popup, buf);
 
@@ -44,7 +47,7 @@ impl Widget for HelpPanel {
             }
             let y = inner.y + i as u16;
             let key_style = Style::default()
-                .fg(theme::FILTER_COLOR)
+                .fg(p.filter_color)
                 .add_modifier(Modifier::BOLD);
             let desc_style = Style::default();
 

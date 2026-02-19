@@ -1,5 +1,5 @@
 use crate::data_source::ViewMode;
-use crate::ui::theme;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -22,11 +22,13 @@ pub struct HeaderBar<'a> {
     pub view_mode: Option<&'a ViewMode>,
     pub project_count: usize,
     pub active_project_idx: usize,
+    pub palette: &'a ThemePalette,
 }
 
 impl<'a> Widget for HeaderBar<'a> {
     fn render(self, area: Rect, buf: &mut Buf) {
-        let bg = Style::default().bg(theme::HEADER_BG);
+        let p = self.palette;
+        let bg = Style::default().bg(p.header_bg);
         for x in area.x..area.right() {
             buf[(x, area.y)].set_style(bg);
         }
@@ -36,27 +38,26 @@ impl<'a> Widget for HeaderBar<'a> {
         spans.push(Span::styled(
             " \u{f06f6} arachne",
             Style::default()
-                .fg(theme::ACCENT)
-                .bg(theme::HEADER_BG)
+                .fg(p.accent)
+                .bg(p.header_bg)
                 .add_modifier(Modifier::BOLD),
         ));
 
         spans.push(Span::styled(
             " \u{2503} ",
-            Style::default().fg(theme::SEPARATOR).bg(theme::HEADER_BG),
+            Style::default().fg(p.separator).bg(p.header_bg),
         ));
 
-        if let Some(p) = self.panes.first() {
+        if let Some(pane) = self.panes.first() {
             spans.push(Span::styled(
-                p.name.to_string(),
-                Style::default().bg(theme::HEADER_BG),
+                pane.name.to_string(),
+                Style::default().bg(p.header_bg),
             ));
             spans.push(Span::styled(
-                format!(" ({}) ", p.branch),
-                Style::default().fg(theme::ACCENT).bg(theme::HEADER_BG),
+                format!(" ({}) ", pane.branch),
+                Style::default().fg(p.accent).bg(p.header_bg),
             ));
 
-            // View mode indicator
             let mode_label = match self.view_mode {
                 Some(ViewMode::Local) => "[Local]",
                 Some(ViewMode::Remote) => "[Remote]",
@@ -65,20 +66,19 @@ impl<'a> Widget for HeaderBar<'a> {
             if !mode_label.is_empty() {
                 spans.push(Span::styled(
                     format!("{mode_label} "),
-                    Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+                    Style::default().fg(p.dim_text).bg(p.header_bg),
                 ));
             }
 
             spans.push(Span::styled(
-                format!("{} commits", p.commit_count),
-                Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+                format!("{} commits", pane.commit_count),
+                Style::default().fg(p.dim_text).bg(p.header_bg),
             ));
 
-            // Project index indicator (when multiple projects)
             if self.project_count > 1 {
                 spans.push(Span::styled(
                     format!("  [{}/{}]", self.active_project_idx + 1, self.project_count),
-                    Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+                    Style::default().fg(p.dim_text).bg(p.header_bg),
                 ));
             }
         }
@@ -86,12 +86,10 @@ impl<'a> Widget for HeaderBar<'a> {
         let left_line = Line::from(spans.clone());
         buf.set_line(area.x, area.y, &left_line, area.width);
 
-        // Right zone: sync + help
         let right = format!("synced: {}  ? help ", self.last_sync);
         let right_w = UnicodeWidthStr::width(right.as_str());
         let area_w = area.width as usize;
 
-        // Center zone: author filter indicator
         if !self.author_filter.is_empty() {
             let filter_text = format!("author: {}", self.author_filter);
             let filter_w = UnicodeWidthStr::width(filter_text.as_str());
@@ -104,9 +102,7 @@ impl<'a> Widget for HeaderBar<'a> {
             if center_x + filter_w < area_w.saturating_sub(right_w) {
                 let filter_span = Span::styled(
                     filter_text,
-                    Style::default()
-                        .fg(theme::FILTER_COLOR)
-                        .bg(theme::HEADER_BG),
+                    Style::default().fg(p.filter_color).bg(p.header_bg),
                 );
                 buf.set_line(
                     area.x + center_x as u16,
@@ -121,7 +117,7 @@ impl<'a> Widget for HeaderBar<'a> {
             let right_x = area.x + (area_w - right_w) as u16;
             let right_span = Span::styled(
                 right,
-                Style::default().fg(theme::DIM_TEXT).bg(theme::HEADER_BG),
+                Style::default().fg(p.dim_text).bg(p.header_bg),
             );
             buf.set_line(right_x, area.y, &Line::from(right_span), right_w as u16);
         }

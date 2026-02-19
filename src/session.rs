@@ -29,7 +29,7 @@ pub fn save(app: &App) {
         let collapsed: Vec<String> = app
             .collapsed_sections
             .iter()
-            .filter_map(|k| section_key_to_string(k))
+            .filter_map(section_key_to_string)
             .collect();
         projects.push(ProjectSession {
             name: proj.name.clone(),

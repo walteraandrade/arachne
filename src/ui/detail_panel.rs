@@ -1,6 +1,6 @@
 use crate::graph::layout::format_time_ago;
 use crate::graph::types::GraphRow;
-use crate::ui::theme;
+use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
     layout::Rect,
@@ -13,6 +13,7 @@ use ratatui::{
 pub struct DetailPanel<'a> {
     pub row: &'a GraphRow,
     pub focused: bool,
+    pub palette: &'a ThemePalette,
 }
 
 impl<'a> Widget for DetailPanel<'a> {
@@ -21,6 +22,7 @@ impl<'a> Widget for DetailPanel<'a> {
             return;
         }
 
+        let p = self.palette;
         let inner_y = area.y;
         let inner_w = area.width.saturating_sub(1) as usize;
         let inner_h = area.height as usize;
@@ -28,11 +30,10 @@ impl<'a> Widget for DetailPanel<'a> {
             return;
         }
 
-        let label_style = Style::default().fg(theme::ACCENT);
+        let label_style = Style::default().fg(p.accent);
         let mut y = inner_y;
         let x = area.x + 1;
 
-        // SHA
         if (y - inner_y) as usize >= inner_h {
             return;
         }
@@ -48,7 +49,6 @@ impl<'a> Widget for DetailPanel<'a> {
         );
         y += 1;
 
-        // Author
         if (y - inner_y) as usize >= inner_h {
             return;
         }
@@ -63,7 +63,6 @@ impl<'a> Widget for DetailPanel<'a> {
         );
         y += 1;
 
-        // Time
         if (y - inner_y) as usize >= inner_h {
             return;
         }
@@ -79,7 +78,6 @@ impl<'a> Widget for DetailPanel<'a> {
         );
         y += 1;
 
-        // Branches
         if !self.row.branch_names.is_empty() && ((y - inner_y) as usize) < inner_h {
             buf.set_line(
                 x,
@@ -93,7 +91,6 @@ impl<'a> Widget for DetailPanel<'a> {
             y += 1;
         }
 
-        // Tags
         if !self.row.tag_names.is_empty() && ((y - inner_y) as usize) < inner_h {
             buf.set_line(
                 x,
@@ -102,7 +99,7 @@ impl<'a> Widget for DetailPanel<'a> {
                     Span::styled("Tags ", label_style),
                     Span::styled(
                         self.row.tag_names.join(", "),
-                        Style::default().fg(theme::TAG_COLOR),
+                        Style::default().fg(p.tag_color),
                     ),
                 ]),
                 inner_w as u16,
@@ -110,7 +107,6 @@ impl<'a> Widget for DetailPanel<'a> {
             y += 1;
         }
 
-        // Blank line + message
         if ((y - inner_y) as usize) < inner_h {
             y += 1;
         }
