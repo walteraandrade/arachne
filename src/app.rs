@@ -2,6 +2,9 @@ const JUST_NOW: &str = "just now";
 
 use crate::config::Config;
 use crate::data_source::{self, LocalSource, RemoteSource, ViewMode};
+use crate::graph::image_cache::ImageCache;
+use crate::graph::pixel_renderer::RenderParams;
+use crate::terminal_graphics::GraphicsCapability;
 use crate::error::Result;
 use crate::event::{AppEvent, GitHubData};
 use crate::git::{repo, types::RepoData};
@@ -61,12 +64,13 @@ pub struct App {
     pub notification: Option<Notification>,
     cached_entries: Vec<DisplayEntry>,
 
+    pub graphics_cap: GraphicsCapability,
     pub palette: ThemePalette,
     pub should_quit: bool,
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, graphics_cap: GraphicsCapability) -> Self {
         let palette = theme::palette_for_theme(config.theme.as_deref());
         Self {
             config,
@@ -89,6 +93,7 @@ impl App {
             collapsed_sections: HashSet::new(),
             notification: None,
             cached_entries: Vec::new(),
+            graphics_cap,
             palette,
             should_quit: false,
         }
@@ -145,6 +150,7 @@ impl App {
                 time_sorted_indices,
                 cached_repo_data,
                 github_failures: 0,
+                image_cache: ImageCache::new(),
             });
         }
         self.collapsed_sections = branch_panel::auto_collapse_defaults(&self.projects);
@@ -239,6 +245,7 @@ impl App {
                     proj.time_sorted_indices = project::build_time_sorted_indices(&proj.rows);
                     proj.cached_repo_data = None;
                     proj.last_sync = JUST_NOW.to_string();
+                    proj.image_cache.clear();
                     self.notification = None;
                 }
                 Err(e) => {
@@ -281,6 +288,12 @@ impl App {
                 result,
             } => {
                 self.handle_remote_data_result(project_idx, result);
+            }
+            AppEvent::Resize => {
+                self.graphics_cap.redetect_cell_size();
+                for proj in &mut self.projects {
+                    proj.image_cache.clear();
+                }
             }
             _ => {}
         }
@@ -817,7 +830,15 @@ impl App {
 
         let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
 
-        if let Some(proj) = self.projects.get(self.active_project) {
+        let render_params = match self.graphics_cap {
+            GraphicsCapability::Kitty {
+                cell_width,
+                cell_height,
+            } => Some(RenderParams::from_cell_size(cell_width, cell_height)),
+            GraphicsCapability::Unsupported => None,
+        };
+
+        if let Some(proj) = self.projects.get_mut(self.active_project) {
             let palette = match proj.active_mode {
                 ViewMode::Remote => self.palette.with_remote_tint(),
                 ViewMode::Local => self.palette.clone(),
@@ -832,8 +853,11 @@ impl App {
                 trunk_count: proj.trunk_count,
                 palette: &palette,
                 branch_index_to_name: &proj.branch_index_to_name,
+                graphics_cap: &self.graphics_cap,
+                image_cache: &mut proj.image_cache,
+                render_params: render_params.as_ref(),
             };
-            frame.render_widget(graph_view, inner);
+            graph_view.render_into(inner, frame.buffer_mut());
         }
     }
 
@@ -936,6 +960,9 @@ impl App {
 
     fn render_overlays(&self, frame: &mut Frame, size: Rect) {
         if self.show_help {
+            if self.graphics_cap.is_kitty() {
+                self.clear_kitty_images_in_area(frame, size);
+            }
             frame.render_widget(HelpPanel { palette: &self.palette }, size);
         }
         if let Some(ref n) = self.notification {
@@ -946,6 +973,14 @@ impl App {
                 },
                 size,
             );
+        }
+    }
+
+    fn clear_kitty_images_in_area(&self, frame: &mut Frame, area: Rect) {
+        use ratatui::layout::Position;
+        let del = crate::kitty_protocol::delete_all_kitty_images();
+        if let Some(cell) = frame.buffer_mut().cell_mut(Position::new(area.x, area.y)) {
+            cell.set_symbol(&del);
         }
     }
 

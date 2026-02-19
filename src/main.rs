@@ -7,8 +7,10 @@ mod git;
 mod github;
 mod graph;
 mod project;
+mod kitty_protocol;
 mod screen;
 mod session;
+mod terminal_graphics;
 #[cfg(test)]
 mod test_utils;
 mod ui;
@@ -44,9 +46,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let config = Config::load(cli.repo);
 
+    let graphics_cap = terminal_graphics::detect_graphics_cap();
     let poll_interval = config.poll_interval_secs;
     let is_first_launch = !Config::config_file_exists();
-    let mut app = App::new(config);
+    let mut app = App::new(config, graphics_cap);
 
     if is_first_launch {
         app.screen = Screen::Config(Box::new(ConfigScreenState::first_launch(&app.config)));

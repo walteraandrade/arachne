@@ -1,7 +1,7 @@
 use crate::data_source::{LocalSource, RemoteSource, ViewMode};
 use crate::git::types::RepoData;
 use crate::github::client::GitHubClient;
-use crate::graph::{dag::Dag, layout, types::GraphRow};
+use crate::graph::{dag::Dag, image_cache::ImageCache, layout, types::GraphRow};
 use std::collections::HashMap;
 
 const MAX_GITHUB_FAILURES: u8 = 3;
@@ -23,6 +23,7 @@ pub struct Project {
     pub time_sorted_indices: Vec<usize>,
     pub cached_repo_data: Option<RepoData>,
     pub github_failures: u8,
+    pub image_cache: ImageCache,
 }
 
 impl Project {
@@ -41,6 +42,7 @@ impl Project {
         self.branch_index_to_name = result.branch_index_to_name;
         self.trunk_count = result.trunk_count;
         self.time_sorted_indices = build_time_sorted_indices(&self.rows);
+        self.image_cache.clear();
     }
 }
 

@@ -1,13 +1,15 @@
 use crate::git::types::CommitSource;
+use crate::graph::image_cache::ImageCache;
 use crate::graph::layout::format_time_short;
+use crate::graph::pixel_renderer::{num_lanes_for_layout, RenderParams};
 use crate::graph::types::{Cell, CellSymbol, GraphRow};
+use crate::terminal_graphics::GraphicsCapability;
 use crate::ui::theme::ThemePalette;
 use ratatui::{
     buffer::Buffer as Buf,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Widget,
 };
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
@@ -44,10 +46,13 @@ pub struct GraphView<'a> {
     pub trunk_count: usize,
     pub palette: &'a ThemePalette,
     pub branch_index_to_name: &'a HashMap<usize, String>,
+    pub graphics_cap: &'a GraphicsCapability,
+    pub image_cache: &'a mut ImageCache,
+    pub render_params: Option<&'a RenderParams>,
 }
 
-impl<'a> Widget for GraphView<'a> {
-    fn render(self, area: Rect, buf: &mut Buf) {
+impl<'a> GraphView<'a> {
+    pub fn render_into(mut self, area: Rect, buf: &mut Buf) {
         if area.height == 0 {
             return;
         }
@@ -81,6 +86,8 @@ impl<'a> Widget for GraphView<'a> {
             self.palette.unfocused_sel_bg
         };
 
+        let use_kitty = self.graphics_cap.is_kitty() && self.render_params.is_some();
+
         for (i, row) in self
             .rows
             .iter()
@@ -97,29 +104,160 @@ impl<'a> Widget for GraphView<'a> {
             let is_selected = abs_idx == self.selected;
             let is_highlighted = self.highlighted_oids.contains(&row.meta.oid);
 
-            let line = build_row_line(
-                row,
-                is_selected,
-                is_highlighted,
-                self.scroll_x,
-                avail_w,
-                self.trunk_count,
-                self.is_active,
-                self.branch_index_to_name,
-                self.palette,
-            );
-            let line_width: usize = line
+            if use_kitty {
+                let params = self.render_params.unwrap();
+                self.render_kitty_row(
+                    buf,
+                    area.x,
+                    y,
+                    avail_w,
+                    row,
+                    is_selected,
+                    is_highlighted,
+                    params,
+                    sel_bg,
+                );
+            } else {
+                let line = build_row_line(
+                    row,
+                    is_selected,
+                    is_highlighted,
+                    self.scroll_x,
+                    avail_w,
+                    self.trunk_count,
+                    self.is_active,
+                    self.branch_index_to_name,
+                    self.palette,
+                );
+                let line_width: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+
+                buf.set_line(area.x, y, &line, area.width);
+
+                if is_selected && line_width < avail_w {
+                    let fill_style = Style::default().bg(sel_bg);
+                    for x in (area.x + line_width as u16)..area.right() {
+                        buf[(x, y)].set_style(fill_style);
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_kitty_row(
+        &mut self,
+        buf: &mut Buf,
+        x_start: u16,
+        y: u16,
+        avail_w: usize,
+        row: &GraphRow,
+        is_selected: bool,
+        _is_highlighted: bool,
+        params: &RenderParams,
+        sel_bg: ratatui::style::Color,
+    ) {
+        let num_lanes = num_lanes_for_layout(&row.layout);
+        let graph_cols = (num_lanes as u16) * params.cols_per_lane();
+
+        // Selection indicator (1 col)
+        let indicator_col = x_start;
+        if is_selected {
+            let indicator_fg = if self.is_active {
+                self.palette.selected_accent
+            } else {
+                self.palette.dim_text
+            };
+            if let Some(cell) = buf.cell_mut(Position::new(indicator_col, y)) {
+                cell.set_symbol("\u{258e}");
+                cell.set_style(Style::default().fg(indicator_fg).bg(sel_bg));
+            }
+        } else if let Some(cell) = buf.cell_mut(Position::new(indicator_col, y)) {
+            cell.set_symbol(" ");
+        }
+
+        let img_start = x_start + 1;
+
+        // Try to get kitty-encoded image from cache
+        if let Some(encoded) = self.image_cache.get_encoded(
+            &row.layout,
+            params,
+            self.palette,
+            self.trunk_count,
+        ) {
+            let encoded = encoded.to_string();
+            // Place encoded image in the first cell of the graph area
+            if let Some(cell) = buf.cell_mut(Position::new(img_start, y)) {
+                cell.set_symbol(&encoded);
+                if is_selected {
+                    cell.set_style(Style::default().bg(sel_bg));
+                }
+            }
+            // Mark remaining graph cells as skip
+            for col in 1..graph_cols {
+                let x = img_start + col;
+                if x >= x_start + avail_w as u16 {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                    cell.set_skip(true);
+                }
+            }
+        } else {
+            // Fallback to unicode cells if image rendering failed
+            for (ci, cell_data) in row.cells.iter().enumerate() {
+                let x = img_start + (ci as u16) * 2;
+                if x >= x_start + avail_w as u16 {
+                    break;
+                }
+                let color = self.palette.branch_color_by_identity(cell_data.color_index, self.trunk_count);
+                let mut style = Style::default().fg(color);
+                if is_selected {
+                    style = style.bg(sel_bg);
+                }
+                if let Some(buf_cell) = buf.cell_mut(Position::new(x, y)) {
+                    buf_cell.set_symbol(cell_glyph(cell_data));
+                    buf_cell.set_style(style);
+                }
+            }
+        }
+
+        // Text portion: starts after graph columns + 1 (indicator) + 1 (gap)
+        let text_start = img_start + graph_cols + 1;
+        if text_start >= x_start + avail_w as u16 {
+            return;
+        }
+
+        let text_budget = (x_start + avail_w as u16).saturating_sub(text_start) as usize;
+        let text_spans = build_text_spans(
+            row,
+            is_selected,
+            self.scroll_x,
+            text_budget,
+            self.trunk_count,
+            self.is_active,
+            self.branch_index_to_name,
+            self.palette,
+        );
+
+        let line = Line::from(text_spans);
+        buf.set_line(text_start, y, &line, text_budget as u16);
+
+        // Fill remaining with selection bg
+        if is_selected {
+            let line_w: usize = line
                 .spans
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
-
-            buf.set_line(area.x, y, &line, area.width);
-
-            if is_selected && line_width < avail_w {
-                let fill_style = Style::default().bg(sel_bg);
-                for x in (area.x + line_width as u16)..area.right() {
-                    buf[(x, y)].set_style(fill_style);
+            let fill_start = text_start + line_w as u16;
+            let fill_style = Style::default().bg(sel_bg);
+            for x in fill_start..(x_start + avail_w as u16) {
+                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                    cell.set_style(fill_style);
                 }
             }
         }
@@ -224,7 +362,6 @@ fn build_row_line(
     palette: &ThemePalette,
 ) -> Line<'static> {
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
-    let mut text_spans: Vec<Span<'static>> = Vec::new();
     let is_fork = matches!(row.meta.source, CommitSource::Fork(_));
     let sel_bg = if is_active {
         palette.selected_bg
@@ -268,11 +405,46 @@ fn build_row_line(
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
 
+    let text_budget = avail_width.saturating_sub(graph_width);
+    let text_spans = build_text_spans(
+        row,
+        selected,
+        scroll_x,
+        text_budget,
+        trunk_count,
+        is_active,
+        branch_index_to_name,
+        palette,
+    );
+
+    let mut spans = graph_spans;
+    spans.extend(text_spans);
+
+    Line::from(spans)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_text_spans(
+    row: &GraphRow,
+    selected: bool,
+    scroll_x: usize,
+    total_budget: usize,
+    trunk_count: usize,
+    is_active: bool,
+    branch_index_to_name: &HashMap<usize, String>,
+    palette: &ThemePalette,
+) -> Vec<Span<'static>> {
+    let mut text_spans: Vec<Span<'static>> = Vec::new();
+    let is_fork = matches!(row.meta.source, CommitSource::Fork(_));
+    let sel_bg = if is_active {
+        palette.selected_bg
+    } else {
+        palette.unfocused_sel_bg
+    };
+
     let time_str = format_time_short(&row.meta.time);
     let time_col_w = 5;
-    let mut budget = avail_width
-        .saturating_sub(graph_width)
-        .saturating_sub(time_col_w);
+    let mut budget = total_budget.saturating_sub(time_col_w);
 
     let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
     let max_branches = 2;
@@ -369,38 +541,36 @@ fn build_row_line(
         text_spans.push(Span::styled(formatted, style));
         budget = budget.saturating_sub(w);
     }
-    let _ = budget;
 
-    if scroll_x > 0 {
-        text_spans = skip_chars_preserving_style(text_spans, scroll_x);
-    }
-
-    let mut spans = graph_spans;
-    spans.extend(text_spans);
-
-    let current_width: usize = spans
+    // Time column — append padding + time
+    let current_w: usize = text_spans
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
-    if avail_width > current_width + time_str.len() {
-        let padding = avail_width - current_width - time_str.len();
+    let remaining = total_budget.saturating_sub(current_w);
+    if remaining > time_str.len() {
+        let padding = remaining - time_str.len();
         if padding > 0 {
             let pad_style = if selected {
                 Style::default().bg(sel_bg)
             } else {
                 Style::default()
             };
-            spans.push(Span::styled(" ".repeat(padding), pad_style));
+            text_spans.push(Span::styled(" ".repeat(padding), pad_style));
         }
         let time_style = if selected {
             Style::default().fg(palette.dim_text).bg(sel_bg)
         } else {
             Style::default().fg(palette.dim_text)
         };
-        spans.push(Span::styled(time_str, time_style));
+        text_spans.push(Span::styled(time_str, time_style));
     }
 
-    Line::from(spans)
+    if scroll_x > 0 {
+        text_spans = skip_chars_preserving_style(text_spans, scroll_x);
+    }
+
+    text_spans
 }
 
 fn skip_chars_preserving_style(spans: Vec<Span<'static>>, skip: usize) -> Vec<Span<'static>> {
