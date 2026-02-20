@@ -124,10 +124,8 @@ impl<'a> Widget for StatusBar<'a> {
                 .sum();
             let center_x = (area_w.saturating_sub(stats_w) / 2).max(left_used);
             if center_x + stats_w < area_w.saturating_sub(hints_w) {
-                let stats_span = Span::styled(
-                    stats,
-                    Style::default().fg(p.dim_text).bg(p.status_bg),
-                );
+                let stats_span =
+                    Span::styled(stats, Style::default().fg(p.dim_text).bg(p.status_bg));
                 buf.set_line(
                     area.x + center_x as u16,
                     area.y,

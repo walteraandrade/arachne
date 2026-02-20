@@ -115,10 +115,7 @@ impl<'a> Widget for HeaderBar<'a> {
 
         if area_w > right_w {
             let right_x = area.x + (area_w - right_w) as u16;
-            let right_span = Span::styled(
-                right,
-                Style::default().fg(p.dim_text).bg(p.header_bg),
-            );
+            let right_span = Span::styled(right, Style::default().fg(p.dim_text).bg(p.header_bg));
             buf.set_line(right_x, area.y, &Line::from(right_span), right_w as u16);
         }
     }

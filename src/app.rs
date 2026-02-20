@@ -245,14 +245,9 @@ impl App {
                         &proj.repo_data,
                         &self.config.trunk_branches,
                     );
-                    proj.rows = result.rows;
-                    proj.branch_index_to_name = result.branch_index_to_name;
-                    proj.trunk_count = result.trunk_count;
-                    proj.max_lanes = result.max_lanes;
-                    proj.time_sorted_indices = project::build_time_sorted_indices(&proj.rows);
+                    proj.apply_layout_result(result);
                     proj.cached_repo_data = None;
                     proj.last_sync = JUST_NOW.to_string();
-                    proj.image_cache.clear();
                     self.notification = None;
                 }
                 Err(e) => {
@@ -315,7 +310,7 @@ impl App {
             AppEvent::Resize => {
                 self.graphics_cap.redetect_cell_size();
                 for proj in &mut self.projects {
-                    proj.image_cache.clear();
+                    proj.image_cache.clear(proj.max_lanes);
                 }
             }
             _ => {}
@@ -544,7 +539,7 @@ impl App {
                     self.active_panel = Panel::Graph;
                 }
                 if let Some(proj) = self.projects.get_mut(self.active_project) {
-                    proj.image_cache.clear();
+                    proj.image_cache.clear(proj.max_lanes);
                 }
             }
             Action::Select => {
@@ -629,6 +624,36 @@ impl App {
             }
             Action::None => {}
         }
+    }
+
+    pub fn flush_kitty_if_needed(
+        &mut self,
+        backend: &mut impl std::io::Write,
+    ) -> std::io::Result<()> {
+        if !self.graphics_cap.is_kitty() {
+            return Ok(());
+        }
+        let any_dirty = self.projects.iter_mut().any(|p| p.image_cache.take_dirty());
+        if any_dirty {
+            write!(
+                backend,
+                "{}",
+                crate::kitty_protocol::delete_all_kitty_images()
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn cleanup_kitty(&self, backend: &mut impl std::io::Write) -> std::io::Result<()> {
+        if self.graphics_cap.is_kitty() {
+            write!(
+                backend,
+                "{}",
+                crate::kitty_protocol::delete_all_kitty_images()
+            )?;
+            backend.flush()?;
+        }
+        Ok(())
     }
 
     fn clamp_selected(&mut self) {

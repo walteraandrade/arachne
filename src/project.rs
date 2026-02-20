@@ -1,7 +1,12 @@
 use crate::data_source::{LocalSource, RemoteSource, ViewMode};
 use crate::git::types::RepoData;
 use crate::github::client::GitHubClient;
-use crate::graph::{dag::Dag, image_cache::ImageCache, layout, types::GraphRow};
+use crate::graph::{
+    dag::Dag,
+    image_cache::ImageCache,
+    layout,
+    types::{GraphRow, LayoutResult},
+};
 use std::collections::HashMap;
 
 const MAX_GITHUB_FAILURES: u8 = 3;
@@ -16,6 +21,7 @@ pub struct Project {
     pub rows: Vec<GraphRow>,
     pub branch_index_to_name: HashMap<usize, String>,
     pub trunk_count: usize,
+    pub max_lanes: usize,
     pub current_branch: String,
     pub scroll_x: usize,
     pub last_sync: String,
@@ -38,11 +44,16 @@ impl Project {
     pub fn rebuild_layout(&mut self, trunk_branches: &[String]) {
         self.dag = Dag::from_repo_data(&self.repo_data);
         let result = layout::compute_layout(&self.dag, &self.repo_data, trunk_branches);
+        self.apply_layout_result(result);
+    }
+
+    pub fn apply_layout_result(&mut self, result: LayoutResult) {
         self.rows = result.rows;
         self.branch_index_to_name = result.branch_index_to_name;
         self.trunk_count = result.trunk_count;
+        self.max_lanes = result.max_lanes;
         self.time_sorted_indices = build_time_sorted_indices(&self.rows);
-        self.image_cache.clear();
+        self.image_cache.clear(self.max_lanes);
     }
 }
 

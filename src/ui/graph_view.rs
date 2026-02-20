@@ -77,7 +77,6 @@ impl<'a> GraphView<'a> {
             self.rows.get(self.scroll_y),
             self.branch_index_to_name,
             self.trunk_count,
-            self.max_lanes,
             self.palette,
         );
 
@@ -185,7 +184,6 @@ impl<'a> GraphView<'a> {
             params,
             self.palette,
             self.trunk_count,
-            self.max_lanes,
             img_start,
             x_start,
             y,
@@ -265,7 +263,6 @@ fn inject_kitty_image(
     params: &RenderParams,
     palette: &ThemePalette,
     trunk_count: usize,
-    max_lanes: usize,
     img_start: u16,
     x_start: u16,
     y: u16,
@@ -274,7 +271,7 @@ fn inject_kitty_image(
     is_selected: bool,
     sel_bg: ratatui::style::Color,
 ) {
-    if let Some(png) = image_cache.get_png(layout, params, palette, trunk_count, max_lanes) {
+    if let Some(png) = image_cache.get_png(layout, params, palette, trunk_count) {
         let image_id = (y + 1) as u32;
         let encoded = encode_kitty_image(image_id, png, graph_cols, 1);
         if let Some(cell) = buf.cell_mut(Position::new(img_start, y)) {
@@ -320,7 +317,6 @@ fn render_lane_header(
     first_visible_row: Option<&GraphRow>,
     branch_index_to_name: &HashMap<usize, String>,
     trunk_count: usize,
-    _max_lanes: usize,
     palette: &ThemePalette,
 ) {
     let header_bg = Style::default().bg(palette.lane_header_bg);

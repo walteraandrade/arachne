@@ -25,11 +25,7 @@ impl<'a> Widget for ConfigScreen<'a> {
 
         let outer = Block::default()
             .title(" arachne config ")
-            .title_style(
-                Style::default()
-                    .fg(p.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .title_style(Style::default().fg(p.accent).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(p.active_panel_border));
         let inner = outer.inner(area);
@@ -44,7 +40,7 @@ impl<'a> Widget for ConfigScreen<'a> {
             .constraints([
                 Constraint::Length(1), // tabs
                 Constraint::Length(1), // separator
-                Constraint::Min(1),   // content
+                Constraint::Min(1),    // content
                 Constraint::Length(1), // footer
             ])
             .split(inner);
@@ -81,12 +77,7 @@ fn render_tabs(buf: &mut Buf, area: Rect, active: ConfigSection, p: &ThemePalett
     }
 }
 
-fn render_section_content(
-    buf: &mut Buf,
-    area: Rect,
-    state: &ConfigScreenState,
-    p: &ThemePalette,
-) {
+fn render_section_content(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &ThemePalette) {
     if area.height == 0 {
         return;
     }
@@ -99,12 +90,7 @@ fn render_section_content(
     }
 }
 
-fn render_repos_section(
-    buf: &mut Buf,
-    area: Rect,
-    state: &ConfigScreenState,
-    p: &ThemePalette,
-) {
+fn render_repos_section(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &ThemePalette) {
     let repos = state.draft.resolved_repos();
     let x = area.x + 2;
     let max_w = area.width.saturating_sub(4);
@@ -139,10 +125,7 @@ fn render_repos_section(
         } else {
             let bg = if is_selected { p.selected_bg } else { p.app_bg };
             Line::from(vec![
-                Span::styled(
-                    path_str.to_string(),
-                    Style::default().fg(p.accent).bg(bg),
-                ),
+                Span::styled(path_str.to_string(), Style::default().fg(p.accent).bg(bg)),
                 Span::styled(
                     format!("  {name_str}"),
                     Style::default().fg(p.dim_text).bg(bg),
@@ -169,14 +152,9 @@ fn render_repos_section(
     }
 }
 
-fn render_trunk_section(
-    buf: &mut Buf,
-    area: Rect,
-    state: &ConfigScreenState,
-    p: &ThemePalette,
-) {
+fn render_trunk_section(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &ThemePalette) {
     let x = area.x + 2;
-    let max_w = area.width.saturating_sub(4) as u16;
+    let max_w = area.width.saturating_sub(4);
 
     for (i, branch) in state.draft.trunk_branches.iter().enumerate() {
         let y = area.y + i as u16;
@@ -220,14 +198,9 @@ fn render_trunk_section(
     }
 }
 
-fn render_theme_section(
-    buf: &mut Buf,
-    area: Rect,
-    state: &ConfigScreenState,
-    p: &ThemePalette,
-) {
+fn render_theme_section(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &ThemePalette) {
     let x = area.x + 2;
-    let max_w = area.width.saturating_sub(4) as u16;
+    let max_w = area.width.saturating_sub(4);
 
     let active_theme = state.draft.theme.as_deref().unwrap_or("Arachne Purple");
 
@@ -244,10 +217,7 @@ fn render_theme_section(
         let bg = if is_selected { p.selected_bg } else { p.app_bg };
 
         let line = Line::from(vec![
-            Span::styled(
-                marker.to_string(),
-                Style::default().fg(p.accent).bg(bg),
-            ),
+            Span::styled(marker.to_string(), Style::default().fg(p.accent).bg(bg)),
             Span::styled(name.to_string(), Style::default().bg(bg)),
         ]);
 
@@ -270,14 +240,9 @@ fn render_theme_section(
     }
 }
 
-fn render_profiles_section(
-    buf: &mut Buf,
-    area: Rect,
-    state: &ConfigScreenState,
-    p: &ThemePalette,
-) {
+fn render_profiles_section(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &ThemePalette) {
     let x = area.x + 2;
-    let max_w = area.width.saturating_sub(4) as u16;
+    let max_w = area.width.saturating_sub(4);
 
     if state.draft.profiles.is_empty() {
         let y = area.y;
@@ -312,10 +277,7 @@ fn render_profiles_section(
         };
 
         let line = Line::from(vec![
-            Span::styled(
-                marker.to_string(),
-                Style::default().fg(p.accent).bg(bg),
-            ),
+            Span::styled(marker.to_string(), Style::default().fg(p.accent).bg(bg)),
             Span::styled(profile.name.clone(), Style::default().bg(bg)),
             Span::styled(
                 token_hint.to_string(),
@@ -353,10 +315,7 @@ fn render_footer(buf: &mut Buf, area: Rect, state: &ConfigScreenState, p: &Theme
                 .bg(p.app_bg)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            "  Esc: back",
-            Style::default().fg(p.dim_text).bg(p.app_bg),
-        ),
+        Span::styled("  Esc: back", Style::default().fg(p.dim_text).bg(p.app_bg)),
         Span::styled(
             "  Tab: section",
             Style::default().fg(p.dim_text).bg(p.app_bg),

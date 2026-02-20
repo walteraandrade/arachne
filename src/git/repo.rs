@@ -94,9 +94,7 @@ fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>> {
             }
         };
         let time = match repo.find_commit(target_oid) {
-            Ok(c) => chrono::Utc
-                .timestamp_opt(c.time().seconds(), 0)
-                .single(),
+            Ok(c) => chrono::Utc.timestamp_opt(c.time().seconds(), 0).single(),
             Err(e) if e.code() == git2::ErrorCode::NotFound => None,
             Err(e) => {
                 callback_err = Some(e);

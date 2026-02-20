@@ -6,8 +6,8 @@ mod event;
 mod git;
 mod github;
 mod graph;
-mod project;
 mod kitty_protocol;
+mod project;
 mod screen;
 mod session;
 mod terminal_graphics;
@@ -105,6 +105,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     });
 
     loop {
+        app.flush_kitty_if_needed(terminal.backend_mut())?;
         terminal.draw(|f| app.render(f))?;
 
         let first = if app.has_active_notification() {
@@ -165,6 +166,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     for handle in poller_handles {
         handle.abort();
     }
+
+    app.cleanup_kitty(terminal.backend_mut())?;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
