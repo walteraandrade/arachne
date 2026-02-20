@@ -1,4 +1,4 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 
 const CHUNK_SIZE: usize = 4096;
 
@@ -7,13 +7,13 @@ pub fn encode_kitty_image(image_id: u32, png_bytes: &[u8], cols: u16, rows: u16)
     let chunks: Vec<&str> = b64
         .as_bytes()
         .chunks(CHUNK_SIZE)
-        .map(|c| std::str::from_utf8(c).unwrap())
+        .map(|c| std::str::from_utf8(c).unwrap_or_default())
         .collect();
 
     let mut out = String::new();
     for (i, chunk) in chunks.iter().enumerate() {
         let is_first = i == 0;
-        let is_last = i == chunks.len() - 1;
+        let is_last = i + 1 == chunks.len();
         let more = if is_last { 0 } else { 1 };
 
         out.push_str("\x1b_G");
@@ -28,10 +28,6 @@ pub fn encode_kitty_image(image_id: u32, png_bytes: &[u8], cols: u16, rows: u16)
         out.push_str("\x1b\\");
     }
     out
-}
-
-pub fn delete_kitty_images_at_cursor() -> String {
-    "\x1b_Ga=d,d=C,q=2;\x1b\\".to_string()
 }
 
 pub fn delete_all_kitty_images() -> String {
@@ -64,8 +60,8 @@ mod tests {
 
     #[test]
     fn delete_produces_valid_sequence() {
-        let del = delete_kitty_images_at_cursor();
+        let del = delete_all_kitty_images();
         assert!(del.starts_with("\x1b_G"));
-        assert!(del.contains("a=d,d=C"));
+        assert!(del.contains("a=d,d=a"));
     }
 }

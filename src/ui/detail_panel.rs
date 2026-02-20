@@ -1,3 +1,4 @@
+use super::truncate_with_ellipsis;
 use crate::graph::layout::format_time_ago;
 use crate::graph::types::RowMeta;
 use crate::ui::theme::ThemePalette;
@@ -116,15 +117,11 @@ impl<'a> Widget for DetailPanel<'a> {
                 if i >= remaining {
                     break;
                 }
-                let truncated = if line.len() > inner_w {
-                    &line[..inner_w]
-                } else {
-                    line
-                };
+                let truncated = truncate_with_ellipsis(line, inner_w);
                 buf.set_line(
                     x,
                     y + i as u16,
-                    &Line::from(Span::raw(truncated.to_string())),
+                    &Line::from(Span::raw(truncated)),
                     inner_w as u16,
                 );
             }

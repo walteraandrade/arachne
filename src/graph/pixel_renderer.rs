@@ -1,12 +1,11 @@
 use crate::graph::types::{EdgeKind, RowLayout};
 use crate::ui::theme::ThemePalette;
 use ratatui::style::Color;
-use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
-};
+use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+
+pub const COLS_PER_LANE: u16 = 2;
 
 pub struct RenderParams {
-    pub cell_width: u16,
     pub cell_height: u16,
     pub line_width: f32,
     pub commit_radius: f32,
@@ -17,16 +16,11 @@ impl RenderParams {
     pub fn from_cell_size(cell_width: u16, cell_height: u16) -> Self {
         let lane_width = cell_width as f32 * 2.0;
         Self {
-            cell_width,
             cell_height,
             line_width: 2.0,
             commit_radius: (cell_width as f32 * 0.45).max(3.0),
             lane_width,
         }
-    }
-
-    pub fn cols_per_lane(&self) -> u16 {
-        2
     }
 }
 
@@ -58,17 +52,9 @@ pub fn render_row_image(
     params: &RenderParams,
     palette: &ThemePalette,
     trunk_count: usize,
+    total_lanes: usize,
 ) -> Option<Vec<u8>> {
-    let num_lanes = layout
-        .passthrough_lanes
-        .iter()
-        .map(|p| p.lane + 1)
-        .chain(layout.edges.iter().map(|e| e.from_lane.max(e.to_lane) + 1))
-        .max()
-        .unwrap_or(0)
-        .max(layout.commit_lane + 1);
-
-    let img_width = (num_lanes as f32 * params.lane_width).ceil() as u32;
+    let img_width = (total_lanes as f32 * params.lane_width).ceil() as u32;
     let img_height = params.cell_height as u32;
 
     if img_width == 0 || img_height == 0 {
@@ -77,12 +63,11 @@ pub fn render_row_image(
 
     let mut pixmap = Pixmap::new(img_width, img_height)?;
 
-    let stroke = {
-        let mut s = Stroke::default();
-        s.width = params.line_width;
-        s.line_cap = LineCap::Round;
-        s.line_join = LineJoin::Round;
-        s
+    let stroke = Stroke {
+        width: params.line_width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
     };
 
     // Passthrough lanes: vertical lines
@@ -161,27 +146,22 @@ pub fn render_row_image(
         pb.close();
         pb.finish()
     } {
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
     }
 
-    Some(pixmap.encode_png().ok()?)
-}
-
-pub fn num_lanes_for_layout(layout: &RowLayout) -> usize {
-    layout
-        .passthrough_lanes
-        .iter()
-        .map(|p| p.lane + 1)
-        .chain(layout.edges.iter().map(|e| e.from_lane.max(e.to_lane) + 1))
-        .max()
-        .unwrap_or(0)
-        .max(layout.commit_lane + 1)
+    pixmap.encode_png().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::types::{Edge, EdgeKind, LaneOccupant, RowLayout};
+    use crate::graph::types::{num_lanes_for_layout, Edge, EdgeKind, LaneOccupant, RowLayout};
     use crate::ui::theme::palette_for_theme;
 
     fn make_simple_layout() -> RowLayout {
@@ -200,7 +180,8 @@ mod tests {
         let layout = make_simple_layout();
         let params = RenderParams::from_cell_size(8, 16);
         let palette = palette_for_theme(None);
-        let png = render_row_image(&layout, &params, &palette, 0);
+        let lanes = num_lanes_for_layout(&layout);
+        let png = render_row_image(&layout, &params, &palette, 0, lanes);
         assert!(png.is_some());
         let bytes = png.unwrap();
         assert!(bytes.len() > 8);
@@ -227,7 +208,8 @@ mod tests {
         };
         let params = RenderParams::from_cell_size(8, 16);
         let palette = palette_for_theme(None);
-        let png = render_row_image(&layout, &params, &palette, 0);
+        let lanes = num_lanes_for_layout(&layout);
+        let png = render_row_image(&layout, &params, &palette, 0, lanes);
         assert!(png.is_some());
         let bytes = png.unwrap();
         assert!(bytes.len() > 100); // should have meaningful content
@@ -238,7 +220,8 @@ mod tests {
         let layout = make_simple_layout();
         let params = RenderParams::from_cell_size(10, 20);
         let palette = palette_for_theme(None);
-        let png = render_row_image(&layout, &params, &palette, 0).unwrap();
+        let lanes = num_lanes_for_layout(&layout);
+        let png = render_row_image(&layout, &params, &palette, 0, lanes).unwrap();
         // Decode PNG header to check dimensions
         // PNG width is at bytes 16-19, height at 20-23 (big-endian u32)
         assert!(png.len() > 24);

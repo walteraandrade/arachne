@@ -1,3 +1,5 @@
+use crate::graph::pixel_renderer::RenderParams;
+
 #[derive(Debug, Clone)]
 pub enum GraphicsCapability {
     Kitty { cell_width: u16, cell_height: u16 },
@@ -41,10 +43,12 @@ fn is_kitty_capable_terminal() -> bool {
 fn query_cell_pixel_size() -> Option<(u16, u16)> {
     use std::mem::MaybeUninit;
     let mut ws = MaybeUninit::<libc::winsize>::uninit();
+    // SAFETY: ws is a valid MaybeUninit pointer; ioctl writes into it on success.
     let ret = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, ws.as_mut_ptr()) };
     if ret != 0 {
         return None;
     }
+    // SAFETY: ioctl returned 0, so ws is fully initialized.
     let ws = unsafe { ws.assume_init() };
     if ws.ws_col == 0 || ws.ws_row == 0 || ws.ws_xpixel == 0 || ws.ws_ypixel == 0 {
         return None;
@@ -62,12 +66,12 @@ impl GraphicsCapability {
         matches!(self, GraphicsCapability::Kitty { .. })
     }
 
-    pub fn cell_size(&self) -> Option<(u16, u16)> {
+    pub fn render_params(&self) -> Option<RenderParams> {
         match self {
             GraphicsCapability::Kitty {
                 cell_width,
                 cell_height,
-            } => Some((*cell_width, *cell_height)),
+            } => Some(RenderParams::from_cell_size(*cell_width, *cell_height)),
             GraphicsCapability::Unsupported => None,
         }
     }
@@ -89,8 +93,10 @@ impl GraphicsCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn unsupported_when_tmux_set() {
         std::env::set_var("TMUX", "/tmp/tmux-1000/default,12345,0");
         let cap = detect_graphics_cap();

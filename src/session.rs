@@ -25,7 +25,8 @@ fn session_path() -> std::path::PathBuf {
 
 pub fn save(app: &App) {
     let mut projects = Vec::new();
-    for proj in &app.projects {
+    for (idx, proj) in app.projects.iter().enumerate() {
+        let is_active = idx == app.active_project;
         let collapsed: Vec<String> = app
             .collapsed_sections
             .iter()
@@ -33,10 +34,10 @@ pub fn save(app: &App) {
             .collect();
         projects.push(ProjectSession {
             name: proj.name.clone(),
-            graph_selected: app.graph_selected,
-            branch_selected: app.branch_selected,
+            graph_selected: if is_active { app.graph_selected } else { 0 },
+            branch_selected: if is_active { app.branch_selected } else { 0 },
             scroll_x: proj.scroll_x,
-            collapsed_sections: collapsed,
+            collapsed_sections: if is_active { collapsed } else { Vec::new() },
         });
     }
 
@@ -81,13 +82,15 @@ pub fn restore(app: &mut App) {
     {
         app.active_project = idx;
     } else {
-        app.active_project = state.active_project.min(app.projects.len().saturating_sub(1));
+        app.active_project = state
+            .active_project
+            .min(app.projects.len().saturating_sub(1));
     }
 
     // Restore per-project state
     for saved in &state.projects {
         if let Some(proj) = app.projects.iter_mut().find(|p| p.name == saved.name) {
-            proj.scroll_x = saved.scroll_x;
+            proj.scroll_x = saved.scroll_x.min(10_000);
         }
     }
 
@@ -103,7 +106,9 @@ pub fn restore(app: &mut App) {
         } else {
             0
         };
-        app.branch_selected = saved.branch_selected;
+        app.branch_selected = saved
+            .branch_selected
+            .min(app.cached_entries.len().saturating_sub(1));
 
         // Restore collapsed sections
         for s in &saved.collapsed_sections {

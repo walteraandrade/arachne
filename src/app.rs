@@ -2,15 +2,14 @@ const JUST_NOW: &str = "just now";
 
 use crate::config::Config;
 use crate::data_source::{self, LocalSource, RemoteSource, ViewMode};
-use crate::graph::image_cache::ImageCache;
-use crate::graph::pixel_renderer::RenderParams;
-use crate::terminal_graphics::GraphicsCapability;
 use crate::error::Result;
 use crate::event::{AppEvent, GitHubData};
 use crate::git::{repo, types::RepoData};
+use crate::graph::image_cache::ImageCache;
 use crate::graph::{dag::Dag, filter::filter_by_author, layout};
 use crate::project::{self, Project};
 use crate::screen::{ConfigAction, ConfigScreenState, Screen};
+use crate::terminal_graphics::GraphicsCapability;
 use crate::ui::{
     branch_panel::{self, BranchPanel, DisplayEntry, SectionKey},
     config_screen::ConfigScreen,
@@ -62,10 +61,11 @@ pub struct App {
     pub author_filter_text: String,
     pub collapsed_sections: HashSet<SectionKey>,
     pub notification: Option<Notification>,
-    cached_entries: Vec<DisplayEntry>,
+    pub(crate) cached_entries: Vec<DisplayEntry>,
 
     pub graphics_cap: GraphicsCapability,
     pub palette: ThemePalette,
+    pub confirm_quit: bool,
     pub should_quit: bool,
 }
 
@@ -95,8 +95,13 @@ impl App {
             cached_entries: Vec::new(),
             graphics_cap,
             palette,
+            confirm_quit: false,
             should_quit: false,
         }
+    }
+
+    fn apply_theme(&mut self) {
+        self.palette = theme::palette_for_theme(self.config.theme.as_deref());
     }
 
     pub fn has_active_notification(&self) -> bool {
@@ -143,6 +148,7 @@ impl App {
                 rows: result.rows,
                 branch_index_to_name: result.branch_index_to_name,
                 trunk_count: result.trunk_count,
+                max_lanes: result.max_lanes,
                 current_branch,
                 scroll_x: 0,
                 last_sync: JUST_NOW.to_string(),
@@ -242,6 +248,7 @@ impl App {
                     proj.rows = result.rows;
                     proj.branch_index_to_name = result.branch_index_to_name;
                     proj.trunk_count = result.trunk_count;
+                    proj.max_lanes = result.max_lanes;
                     proj.time_sorted_indices = project::build_time_sorted_indices(&proj.rows);
                     proj.cached_repo_data = None;
                     proj.last_sync = JUST_NOW.to_string();
@@ -256,7 +263,9 @@ impl App {
                         let name = proj.name.clone();
                         self.notify(
                             NotifyLevel::Warn,
-                            format!("github polling disabled for {name} \u{2014} repeated failures"),
+                            format!(
+                                "github polling disabled for {name} \u{2014} repeated failures"
+                            ),
                         );
                     }
                 }
@@ -266,6 +275,20 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: AppEvent) {
+        if self.confirm_quit {
+            if let AppEvent::Key(key) = &event {
+                match key.code {
+                    crossterm::event::KeyCode::Char('y') => {
+                        self.should_quit = true;
+                        return;
+                    }
+                    _ => {
+                        self.confirm_quit = false;
+                        return;
+                    }
+                }
+            }
+        }
         match event {
             AppEvent::Key(key) => match &mut self.screen {
                 Screen::Config(ref mut state) => {
@@ -326,7 +349,7 @@ impl App {
     fn handle_config_action(&mut self, action: ConfigAction) {
         match action {
             ConfigAction::Close => {
-                self.palette = theme::palette_for_theme(self.config.theme.as_deref());
+                self.apply_theme();
                 self.screen = Screen::Graph;
             }
             ConfigAction::Save => {
@@ -338,10 +361,12 @@ impl App {
                     }
                     let was_first_launch = state.first_launch;
                     self.config = new_config;
-                    self.palette = theme::palette_for_theme(self.config.theme.as_deref());
+                    self.apply_theme();
                     self.screen = Screen::Graph;
                     if was_first_launch {
-                        let _ = self.load_repos();
+                        if let Err(e) = self.load_repos() {
+                            self.notify(NotifyLevel::Error, format!("load repos: {e}"));
+                        }
                         if let Some(ref tx) = self.event_tx {
                             let _ = tx.send(AppEvent::ConfigSaved);
                         }
@@ -358,70 +383,20 @@ impl App {
                     self.palette = theme::palette_for_theme(Some(name));
                 }
             }
-            ConfigAction::Quit | ConfigAction::QuitConfirm => {
+            ConfigAction::Quit => {
                 self.should_quit = true;
+            }
+            ConfigAction::QuitConfirm => {
+                self.confirm_quit = true;
             }
             ConfigAction::AddItem => {
                 if let Screen::Config(ref mut state) = self.screen {
-                    match state.active_section {
-                        crate::screen::ConfigSection::Repos => {
-                            state.draft.repos.push(crate::config::RepoEntry {
-                                path: std::path::PathBuf::from(""),
-                                name: None,
-                            });
-                            state.cursor = state.draft.repos.len().saturating_sub(1);
-                            state.dirty = true;
-                            state.start_edit_public();
-                        }
-                        crate::screen::ConfigSection::Trunk => {
-                            state.draft.trunk_branches.push(String::new());
-                            state.cursor = state.draft.trunk_branches.len().saturating_sub(1);
-                            state.dirty = true;
-                            state.start_edit_public();
-                        }
-                        crate::screen::ConfigSection::Profiles => {
-                            let name = format!("profile-{}", state.draft.profiles.len() + 1);
-                            state.draft.profiles.push(crate::config::ProfileEntry {
-                                name,
-                                ..Default::default()
-                            });
-                            state.cursor = state.draft.profiles.len().saturating_sub(1);
-                            state.dirty = true;
-                        }
-                        crate::screen::ConfigSection::Theme => {}
-                    }
+                    state.add_item();
                 }
             }
             ConfigAction::RemoveItem => {
                 if let Screen::Config(ref mut state) = self.screen {
-                    match state.active_section {
-                        crate::screen::ConfigSection::Repos => {
-                            if !state.draft.repos.is_empty() {
-                                let idx = state.cursor.min(state.draft.repos.len() - 1);
-                                state.draft.repos.remove(idx);
-                                state.dirty = true;
-                                state.clamp_cursor();
-                            }
-                        }
-                        crate::screen::ConfigSection::Trunk => {
-                            if !state.draft.trunk_branches.is_empty() {
-                                let idx =
-                                    state.cursor.min(state.draft.trunk_branches.len() - 1);
-                                state.draft.trunk_branches.remove(idx);
-                                state.dirty = true;
-                                state.clamp_cursor();
-                            }
-                        }
-                        crate::screen::ConfigSection::Profiles => {
-                            if state.draft.profiles.len() > 1 {
-                                let idx = state.cursor.min(state.draft.profiles.len() - 1);
-                                state.draft.profiles.remove(idx);
-                                state.dirty = true;
-                                state.clamp_cursor();
-                            }
-                        }
-                        crate::screen::ConfigSection::Theme => {}
-                    }
+                    state.remove_item();
                 }
             }
             ConfigAction::None => {}
@@ -567,6 +542,9 @@ impl App {
                 self.show_detail = !self.show_detail;
                 if !self.show_detail && self.active_panel == Panel::Detail {
                     self.active_panel = Panel::Graph;
+                }
+                if let Some(proj) = self.projects.get_mut(self.active_project) {
+                    proj.image_cache.clear();
                 }
             }
             Action::Select => {
@@ -733,7 +711,6 @@ impl App {
 
         self.render_header(frame, header_area);
 
-        self.refresh_entries();
         let panel_w = self.branch_panel_width(size.width);
         let detail_w: u16 = if self.show_detail { 50 } else { 0 };
 
@@ -830,13 +807,7 @@ impl App {
 
         let highlighted: HashSet<_> = self.get_highlighted_oids(&self.cached_entries);
 
-        let render_params = match self.graphics_cap {
-            GraphicsCapability::Kitty {
-                cell_width,
-                cell_height,
-            } => Some(RenderParams::from_cell_size(cell_width, cell_height)),
-            GraphicsCapability::Unsupported => None,
-        };
+        let render_params = self.graphics_cap.render_params();
 
         if let Some(proj) = self.projects.get_mut(self.active_project) {
             let palette = match proj.active_mode {
@@ -851,6 +822,7 @@ impl App {
                 highlighted_oids: &highlighted,
                 is_active,
                 trunk_count: proj.trunk_count,
+                max_lanes: proj.max_lanes,
                 palette: &palette,
                 branch_index_to_name: &proj.branch_index_to_name,
                 graphics_cap: &self.graphics_cap,
@@ -963,7 +935,40 @@ impl App {
             if self.graphics_cap.is_kitty() {
                 self.clear_kitty_images_in_area(frame, size);
             }
-            frame.render_widget(HelpPanel { palette: &self.palette }, size);
+            frame.render_widget(
+                HelpPanel {
+                    palette: &self.palette,
+                },
+                size,
+            );
+        }
+        if self.confirm_quit {
+            use ratatui::text::{Line, Span};
+            let dialog_area = crate::ui::centered_rect(30, 15, size);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(self.palette.warn_fg))
+                .title(" Quit ")
+                .title_style(
+                    Style::default()
+                        .fg(self.palette.warn_fg)
+                        .add_modifier(Modifier::BOLD),
+                );
+            let inner = block.inner(dialog_area);
+            frame.render_widget(ratatui::widgets::Clear, dialog_area);
+            frame.render_widget(block, dialog_area);
+            if inner.height >= 2 && inner.width >= 10 {
+                let msg = Line::from(Span::styled(
+                    "Discard changes? (y/n)",
+                    Style::default().fg(self.palette.content_fg),
+                ));
+                frame.buffer_mut().set_line(
+                    inner.x + 1,
+                    inner.y + 1,
+                    &msg,
+                    inner.width.saturating_sub(2),
+                );
+            }
         }
         if let Some(ref n) = self.notification {
             frame.render_widget(

@@ -11,7 +11,11 @@ fn is_trunk_branch(bi: Option<usize>, trunk_count: usize) -> bool {
 impl GraphRow {
     pub fn new(layout: RowLayout, meta: RowMeta) -> Self {
         let cells = rasterize_to_cells(&layout);
-        Self { layout, meta, cells }
+        Self {
+            layout,
+            meta,
+            cells,
+        }
     }
 }
 
@@ -111,18 +115,26 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
             } else if let Some(lane) = parent_branch.filter(|_| parent_is_trunk) {
                 if state.columns[lane].is_none() {
                     state.columns[lane] = Some(*first_parent);
-                    if lane != col {
-                        edges.push(Edge {
-                            from_lane: col,
-                            to_lane: lane,
-                            kind: EdgeKind::MergeToParent { color_index: color },
-                        });
-                    }
+                    edges.push(Edge {
+                        from_lane: col,
+                        to_lane: lane,
+                        kind: EdgeKind::MergeToParent { color_index: color },
+                    });
                 } else {
                     state.columns[col] = Some(*first_parent);
+                    edges.push(Edge {
+                        from_lane: col,
+                        to_lane: col,
+                        kind: EdgeKind::MergeToParent { color_index: color },
+                    });
                 }
             } else {
                 state.columns[col] = Some(*first_parent);
+                edges.push(Edge {
+                    from_lane: col,
+                    to_lane: col,
+                    kind: EdgeKind::MergeToParent { color_index: color },
+                });
             }
 
             for parent in parents.iter().skip(1) {
@@ -187,10 +199,17 @@ pub fn compute_layout(dag: &Dag, repo_data: &RepoData, trunk_branches: &[String]
         rows.push(GraphRow::new(layout, meta));
     }
 
+    let max_lanes = rows
+        .iter()
+        .map(|r| num_lanes_for_layout(&r.layout))
+        .max()
+        .unwrap_or(1);
+
     LayoutResult {
         rows,
         branch_index_to_name,
         trunk_count,
+        max_lanes,
     }
 }
 
@@ -275,14 +294,7 @@ fn build_tag_map(tags: &[TagInfo]) -> HashMap<Oid, Vec<String>> {
 }
 
 pub fn rasterize_to_cells(layout: &RowLayout) -> Vec<Cell> {
-    let num_lanes = layout
-        .passthrough_lanes
-        .iter()
-        .map(|p| p.lane + 1)
-        .chain(layout.edges.iter().map(|e| e.from_lane.max(e.to_lane) + 1))
-        .max()
-        .unwrap_or(0)
-        .max(layout.commit_lane + 1);
+    let num_lanes = num_lanes_for_layout(layout);
 
     let mut cells = vec![Cell::empty(); num_lanes];
 

@@ -1,12 +1,6 @@
 use ratatui::style::Color;
 
-pub const THEME_NAMES: &[&str] = &[
-    "Arachne Purple",
-    "Midnight",
-    "Emerald",
-    "Amber",
-    "Frost",
-];
+pub const THEME_NAMES: &[&str] = &["Arachne Purple", "Midnight", "Emerald", "Amber", "Frost"];
 
 #[derive(Clone)]
 pub struct ThemePalette {
@@ -49,8 +43,7 @@ impl ThemePalette {
         if branch_index < trunk_count && branch_index < self.trunk_colors.len() {
             self.trunk_colors[branch_index]
         } else {
-            self.branch_colors
-                [branch_index.saturating_sub(trunk_count) % self.branch_colors.len()]
+            self.branch_colors[branch_index.saturating_sub(trunk_count) % self.branch_colors.len()]
         }
     }
 
@@ -85,20 +78,20 @@ pub fn palette_for_theme(name: Option<&str>) -> ThemePalette {
     }
 }
 
-pub fn branch_prefix_color(name: &str) -> Color {
+pub fn branch_prefix_color(name: &str, palette: &ThemePalette) -> Color {
     if name.starts_with("feat/") || name.starts_with("feature/") {
-        Color::Cyan
+        palette.filter_color
     } else if name.starts_with("fix/") || name.starts_with("bugfix/") || name.starts_with("hotfix/")
     {
-        Color::LightRed
+        palette.error_fg
     } else if name.starts_with("chore/") {
-        Color::Rgb(140, 140, 160)
+        palette.dim_text
     } else if name.starts_with("release/") {
-        Color::Yellow
+        palette.tag_color
     } else if name.starts_with("cherry-pick/") {
-        Color::Magenta
+        palette.accent
     } else {
-        Color::White
+        palette.content_fg
     }
 }
 

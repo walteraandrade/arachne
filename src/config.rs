@@ -12,7 +12,7 @@ pub struct RepoEntry {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProfileEntry {
     pub name: String,
     pub github_token: Option<String>,
@@ -27,6 +27,24 @@ pub struct ProfileEntry {
     #[serde(default = "default_show_forks")]
     pub show_forks: bool,
     pub theme: Option<String>,
+}
+
+impl fmt::Debug for ProfileEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProfileEntry")
+            .field("name", &self.name)
+            .field(
+                "github_token",
+                &self.github_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("repos", &self.repos)
+            .field("trunk_branches", &self.trunk_branches)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("max_commits", &self.max_commits)
+            .field("show_forks", &self.show_forks)
+            .field("theme", &self.theme)
+            .finish()
+    }
 }
 
 fn default_poll_interval() -> u64 {
@@ -46,9 +64,9 @@ impl Default for ProfileEntry {
             github_token: None,
             repos: Vec::new(),
             trunk_branches: Vec::new(),
-            poll_interval_secs: 60,
-            max_commits: 500,
-            show_forks: true,
+            poll_interval_secs: default_poll_interval(),
+            max_commits: default_max_commits(),
+            show_forks: default_show_forks(),
             theme: None,
         }
     }
@@ -165,8 +183,21 @@ impl Config {
         let dir = config_dir().join("arachne");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("config.toml");
-        let content = toml::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let content = toml::to_string_pretty(self).map_err(std::io::Error::other)?;
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
+            file.write_all(content.as_bytes())?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
         std::fs::write(path, content)
     }
 

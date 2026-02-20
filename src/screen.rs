@@ -186,11 +186,11 @@ impl ConfigScreenState {
         match self.active_section {
             ConfigSection::Repos => {
                 let repos = self.draft.resolved_repos();
-                repos.get(self.cursor).map(|r| r.path.to_string_lossy().to_string())
+                repos
+                    .get(self.cursor)
+                    .map(|r| r.path.to_string_lossy().to_string())
             }
-            ConfigSection::Trunk => {
-                self.draft.trunk_branches.get(self.cursor).cloned()
-            }
+            ConfigSection::Trunk => self.draft.trunk_branches.get(self.cursor).cloned(),
             ConfigSection::Theme | ConfigSection::Profiles => None,
         }
     }
@@ -226,6 +226,66 @@ impl ConfigScreenState {
             self.cursor = 0;
         } else {
             self.cursor = self.cursor.min(count - 1);
+        }
+    }
+
+    pub fn add_item(&mut self) {
+        match self.active_section {
+            ConfigSection::Repos => {
+                self.draft.repos.push(crate::config::RepoEntry {
+                    path: std::path::PathBuf::from(""),
+                    name: None,
+                });
+                self.cursor = self.draft.repos.len().saturating_sub(1);
+                self.dirty = true;
+                self.start_edit_public();
+            }
+            ConfigSection::Trunk => {
+                self.draft.trunk_branches.push(String::new());
+                self.cursor = self.draft.trunk_branches.len().saturating_sub(1);
+                self.dirty = true;
+                self.start_edit_public();
+            }
+            ConfigSection::Profiles => {
+                let name = format!("profile-{}", self.draft.profiles.len() + 1);
+                self.draft.profiles.push(crate::config::ProfileEntry {
+                    name,
+                    ..Default::default()
+                });
+                self.cursor = self.draft.profiles.len().saturating_sub(1);
+                self.dirty = true;
+            }
+            ConfigSection::Theme => {}
+        }
+    }
+
+    pub fn remove_item(&mut self) {
+        match self.active_section {
+            ConfigSection::Repos => {
+                if !self.draft.repos.is_empty() {
+                    let idx = self.cursor.min(self.draft.repos.len() - 1);
+                    self.draft.repos.remove(idx);
+                    self.dirty = true;
+                    self.clamp_cursor();
+                }
+            }
+            ConfigSection::Trunk => {
+                if !self.draft.trunk_branches.is_empty() {
+                    let idx = self.cursor.min(self.draft.trunk_branches.len() - 1);
+                    self.draft.trunk_branches.remove(idx);
+                    self.dirty = true;
+                    self.clamp_cursor();
+                }
+            }
+            ConfigSection::Profiles => {
+                if self.draft.profiles.len() > 1 {
+                    let idx = self.cursor.min(self.draft.profiles.len() - 1);
+                    self.draft.profiles.remove(idx);
+                    self.dirty = true;
+                    self.clamp_cursor();
+                }
+            }
+            ConfigSection::Theme => {}
         }
     }
 }

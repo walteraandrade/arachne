@@ -97,6 +97,18 @@ pub struct LayoutResult {
     pub rows: Vec<GraphRow>,
     pub branch_index_to_name: HashMap<usize, String>,
     pub trunk_count: usize,
+    pub max_lanes: usize,
+}
+
+pub fn num_lanes_for_layout(layout: &RowLayout) -> usize {
+    layout
+        .passthrough_lanes
+        .iter()
+        .map(|p| p.lane + 1)
+        .chain(layout.edges.iter().map(|e| e.from_lane.max(e.to_lane) + 1))
+        .max()
+        .unwrap_or(0)
+        .max(layout.commit_lane + 1)
 }
 
 pub const MAX_LANES: usize = 64;
@@ -134,7 +146,7 @@ impl LayoutState {
             self.columns[idx] = Some(oid);
             idx
         } else if self.columns.len() >= MAX_LANES {
-            debug_assert!(false, "MAX_LANES exceeded; overwriting last column");
+            eprintln!("warning: MAX_LANES exceeded; reusing last column");
             let last = self.columns.len() - 1;
             self.columns[last] = Some(oid);
             last

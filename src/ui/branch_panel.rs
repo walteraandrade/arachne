@@ -369,9 +369,7 @@ fn section_header_line(
     };
 
     let sep_style = if selected {
-        Style::default()
-            .fg(p.section_separator)
-            .bg(p.selected_bg)
+        Style::default().fg(p.section_separator).bg(p.selected_bg)
     } else {
         Style::default().fg(p.section_separator)
     };
@@ -432,7 +430,7 @@ fn entry_line(
         let base_color = if matches!(entry.kind, EntryKind::ForkBranch { .. }) {
             p.fork_dim
         } else {
-            theme::branch_prefix_color(trimmed)
+            theme::branch_prefix_color(trimmed, p)
         };
 
         let bg = if selected { Some(p.selected_bg) } else { None };

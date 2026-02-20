@@ -1,8 +1,9 @@
 use crate::git::types::CommitSource;
 use crate::graph::image_cache::ImageCache;
 use crate::graph::layout::format_time_short;
-use crate::graph::pixel_renderer::{num_lanes_for_layout, RenderParams};
+use crate::graph::pixel_renderer::{RenderParams, COLS_PER_LANE};
 use crate::graph::types::{Cell, CellSymbol, GraphRow};
+use crate::kitty_protocol::encode_kitty_image;
 use crate::terminal_graphics::GraphicsCapability;
 use crate::ui::theme::ThemePalette;
 use ratatui::{
@@ -44,6 +45,7 @@ pub struct GraphView<'a> {
     pub highlighted_oids: &'a std::collections::HashSet<crate::git::types::Oid>,
     pub is_active: bool,
     pub trunk_count: usize,
+    pub max_lanes: usize,
     pub palette: &'a ThemePalette,
     pub branch_index_to_name: &'a HashMap<usize, String>,
     pub graphics_cap: &'a GraphicsCapability,
@@ -75,6 +77,7 @@ impl<'a> GraphView<'a> {
             self.rows.get(self.scroll_y),
             self.branch_index_to_name,
             self.trunk_count,
+            self.max_lanes,
             self.palette,
         );
 
@@ -104,8 +107,7 @@ impl<'a> GraphView<'a> {
             let is_selected = abs_idx == self.selected;
             let is_highlighted = self.highlighted_oids.contains(&row.meta.oid);
 
-            if use_kitty {
-                let params = self.render_params.unwrap();
+            if let (true, Some(params)) = (use_kitty, self.render_params) {
                 self.render_kitty_row(
                     buf,
                     area.x,
@@ -125,7 +127,8 @@ impl<'a> GraphView<'a> {
                     self.scroll_x,
                     avail_w,
                     self.trunk_count,
-                    self.is_active,
+                    self.max_lanes,
+                    sel_bg,
                     self.branch_index_to_name,
                     self.palette,
                 );
@@ -160,74 +163,40 @@ impl<'a> GraphView<'a> {
         params: &RenderParams,
         sel_bg: ratatui::style::Color,
     ) {
-        let num_lanes = num_lanes_for_layout(&row.layout);
-        let graph_cols = (num_lanes as u16) * params.cols_per_lane();
+        let graph_cols = (self.max_lanes as u16) * COLS_PER_LANE;
 
-        // Selection indicator (1 col)
-        let indicator_col = x_start;
-        if is_selected {
-            let indicator_fg = if self.is_active {
-                self.palette.selected_accent
-            } else {
-                self.palette.dim_text
-            };
-            if let Some(cell) = buf.cell_mut(Position::new(indicator_col, y)) {
-                cell.set_symbol("\u{258e}");
-                cell.set_style(Style::default().fg(indicator_fg).bg(sel_bg));
-            }
-        } else if let Some(cell) = buf.cell_mut(Position::new(indicator_col, y)) {
-            cell.set_symbol(" ");
-        }
+        render_selection_indicator(
+            buf,
+            x_start,
+            y,
+            is_selected,
+            sel_bg,
+            self.is_active,
+            self.palette,
+        );
 
         let img_start = x_start + 1;
 
-        // Try to get kitty-encoded image from cache
-        if let Some(encoded) = self.image_cache.get_encoded(
+        inject_kitty_image(
+            buf,
+            self.image_cache,
             &row.layout,
+            &row.cells,
             params,
             self.palette,
             self.trunk_count,
-        ) {
-            let encoded = encoded.to_string();
-            // Place encoded image in the first cell of the graph area
-            if let Some(cell) = buf.cell_mut(Position::new(img_start, y)) {
-                cell.set_symbol(&encoded);
-                if is_selected {
-                    cell.set_style(Style::default().bg(sel_bg));
-                }
-            }
-            // Mark remaining graph cells as skip
-            for col in 1..graph_cols {
-                let x = img_start + col;
-                if x >= x_start + avail_w as u16 {
-                    break;
-                }
-                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
-                    cell.set_skip(true);
-                }
-            }
-        } else {
-            // Fallback to unicode cells if image rendering failed
-            for (ci, cell_data) in row.cells.iter().enumerate() {
-                let x = img_start + (ci as u16) * 2;
-                if x >= x_start + avail_w as u16 {
-                    break;
-                }
-                let color = self.palette.branch_color_by_identity(cell_data.color_index, self.trunk_count);
-                let mut style = Style::default().fg(color);
-                if is_selected {
-                    style = style.bg(sel_bg);
-                }
-                if let Some(buf_cell) = buf.cell_mut(Position::new(x, y)) {
-                    buf_cell.set_symbol(cell_glyph(cell_data));
-                    buf_cell.set_style(style);
-                }
-            }
-        }
+            self.max_lanes,
+            img_start,
+            x_start,
+            y,
+            avail_w,
+            graph_cols,
+            is_selected,
+            sel_bg,
+        );
 
-        // Text portion: starts after graph columns + 1 (indicator) + 1 (gap)
-        let text_start = img_start + graph_cols + 1;
-        if text_start >= x_start + avail_w as u16 {
+        let text_start = img_start.saturating_add(graph_cols).saturating_add(1);
+        if text_start >= x_start.saturating_add(avail_w as u16) {
             return;
         }
 
@@ -238,7 +207,7 @@ impl<'a> GraphView<'a> {
             self.scroll_x,
             text_budget,
             self.trunk_count,
-            self.is_active,
+            sel_bg,
             self.branch_index_to_name,
             self.palette,
         );
@@ -246,19 +215,97 @@ impl<'a> GraphView<'a> {
         let line = Line::from(text_spans);
         buf.set_line(text_start, y, &line, text_budget as u16);
 
-        // Fill remaining with selection bg
         if is_selected {
             let line_w: usize = line
                 .spans
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
-            let fill_start = text_start + line_w as u16;
+            let fill_start = text_start.saturating_add(line_w as u16);
             let fill_style = Style::default().bg(sel_bg);
             for x in fill_start..(x_start + avail_w as u16) {
                 if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
                     cell.set_style(fill_style);
                 }
+            }
+        }
+    }
+}
+
+fn render_selection_indicator(
+    buf: &mut Buf,
+    x_start: u16,
+    y: u16,
+    is_selected: bool,
+    sel_bg: ratatui::style::Color,
+    is_active: bool,
+    palette: &ThemePalette,
+) {
+    if is_selected {
+        let indicator_fg = if is_active {
+            palette.selected_accent
+        } else {
+            palette.dim_text
+        };
+        if let Some(cell) = buf.cell_mut(Position::new(x_start, y)) {
+            cell.set_symbol("\u{258e}");
+            cell.set_style(Style::default().fg(indicator_fg).bg(sel_bg));
+        }
+    } else if let Some(cell) = buf.cell_mut(Position::new(x_start, y)) {
+        cell.set_symbol(" ");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inject_kitty_image(
+    buf: &mut Buf,
+    image_cache: &mut ImageCache,
+    layout: &crate::graph::types::RowLayout,
+    cells: &[Cell],
+    params: &RenderParams,
+    palette: &ThemePalette,
+    trunk_count: usize,
+    max_lanes: usize,
+    img_start: u16,
+    x_start: u16,
+    y: u16,
+    avail_w: usize,
+    graph_cols: u16,
+    is_selected: bool,
+    sel_bg: ratatui::style::Color,
+) {
+    if let Some(png) = image_cache.get_png(layout, params, palette, trunk_count, max_lanes) {
+        let image_id = (y + 1) as u32;
+        let encoded = encode_kitty_image(image_id, png, graph_cols, 1);
+        if let Some(cell) = buf.cell_mut(Position::new(img_start, y)) {
+            cell.set_symbol(&encoded);
+            if is_selected {
+                cell.set_style(Style::default().bg(sel_bg));
+            }
+        }
+        for col in 1..graph_cols {
+            let x = img_start + col;
+            if x >= x_start + avail_w as u16 {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                cell.set_skip(true);
+            }
+        }
+    } else {
+        for (ci, cell_data) in cells.iter().enumerate() {
+            let x = img_start + (ci as u16) * 2;
+            if x >= x_start + avail_w as u16 {
+                break;
+            }
+            let color = palette.branch_color_by_identity(cell_data.color_index, trunk_count);
+            let mut style = Style::default().fg(color);
+            if is_selected {
+                style = style.bg(sel_bg);
+            }
+            if let Some(buf_cell) = buf.cell_mut(Position::new(x, y)) {
+                buf_cell.set_symbol(cell_glyph(cell_data));
+                buf_cell.set_style(style);
             }
         }
     }
@@ -273,6 +320,7 @@ fn render_lane_header(
     first_visible_row: Option<&GraphRow>,
     branch_index_to_name: &HashMap<usize, String>,
     trunk_count: usize,
+    _max_lanes: usize,
     palette: &ThemePalette,
 ) {
     let header_bg = Style::default().bg(palette.lane_header_bg);
@@ -328,26 +376,7 @@ fn render_lane_header(
     }
 }
 
-fn truncate_with_ellipsis(s: &str, max: usize) -> String {
-    if UnicodeWidthStr::width(s) <= max {
-        return s.to_string();
-    }
-    if max <= 1 {
-        return "\u{2026}".to_string();
-    }
-    let mut result = String::new();
-    let mut w = 0;
-    for ch in s.chars() {
-        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if w + cw > max - 1 {
-            break;
-        }
-        result.push(ch);
-        w += cw;
-    }
-    result.push('\u{2026}');
-    result
-}
+use super::truncate_with_ellipsis;
 
 #[allow(clippy::too_many_arguments)]
 fn build_row_line(
@@ -357,20 +386,16 @@ fn build_row_line(
     scroll_x: usize,
     avail_width: usize,
     trunk_count: usize,
-    is_active: bool,
+    max_lanes: usize,
+    sel_bg: ratatui::style::Color,
     branch_index_to_name: &HashMap<usize, String>,
     palette: &ThemePalette,
 ) -> Line<'static> {
     let mut graph_spans: Vec<Span<'static>> = Vec::new();
     let is_fork = matches!(row.meta.source, CommitSource::Fork(_));
-    let sel_bg = if is_active {
-        palette.selected_bg
-    } else {
-        palette.unfocused_sel_bg
-    };
 
     if selected {
-        let indicator_fg = if is_active {
+        let indicator_fg = if sel_bg == palette.selected_bg {
             palette.selected_accent
         } else {
             palette.dim_text
@@ -398,6 +423,16 @@ fn build_row_line(
         }
         graph_spans.push(Span::styled(cell_glyph(cell), style));
     }
+    // Pad to max_lanes so text starts at a fixed column
+    let pad_count = max_lanes.saturating_sub(row.cells.len());
+    if pad_count > 0 {
+        let pad_style = if selected {
+            Style::default().bg(sel_bg)
+        } else {
+            Style::default()
+        };
+        graph_spans.push(Span::styled("  ".repeat(pad_count), pad_style));
+    }
     graph_spans.push(Span::raw(" "));
 
     let graph_width: usize = graph_spans
@@ -412,7 +447,7 @@ fn build_row_line(
         scroll_x,
         text_budget,
         trunk_count,
-        is_active,
+        sel_bg,
         branch_index_to_name,
         palette,
     );
@@ -430,72 +465,20 @@ fn build_text_spans(
     scroll_x: usize,
     total_budget: usize,
     trunk_count: usize,
-    is_active: bool,
+    sel_bg: ratatui::style::Color,
     branch_index_to_name: &HashMap<usize, String>,
     palette: &ThemePalette,
 ) -> Vec<Span<'static>> {
-    let mut text_spans: Vec<Span<'static>> = Vec::new();
     let is_fork = matches!(row.meta.source, CommitSource::Fork(_));
-    let sel_bg = if is_active {
-        palette.selected_bg
-    } else {
-        palette.unfocused_sel_bg
-    };
-
     let time_str = format_time_short(&row.meta.time);
     let time_col_w = 5;
     let mut budget = total_budget.saturating_sub(time_col_w);
 
-    let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
-    let max_branches = 2;
-    let mut showed_branch_label = false;
-    for (i, name) in row.meta.branch_names.iter().enumerate() {
-        if i >= max_branches || budget < 4 {
-            break;
-        }
-        let max_label = budget.min(20);
-        let is_head_branch = row.meta.is_head && i == 0;
-        let prefix = if is_head_branch { "*" } else { "" };
-        let display = format!("{prefix}{name}");
-        let label = truncate_with_ellipsis(&display, max_label.saturating_sub(3));
-        let formatted = format!("[{label}] ");
-        let w = UnicodeWidthStr::width(formatted.as_str());
-        let style = Style::default()
-            .fg(palette.branch_color_by_identity(commit_color_idx, trunk_count))
-            .add_modifier(Modifier::BOLD);
-        text_spans.push(Span::styled(formatted, style));
-        budget = budget.saturating_sub(w);
-        showed_branch_label = true;
-    }
+    let (label_spans, used) =
+        branch_label_spans(row, budget, trunk_count, branch_index_to_name, palette);
+    budget = budget.saturating_sub(used);
 
-    let overflow = row.meta.branch_names.len().saturating_sub(max_branches);
-    if overflow > 0 && budget >= 5 {
-        let overflow_str = format!("[+{overflow}] ");
-        let w = UnicodeWidthStr::width(overflow_str.as_str());
-        text_spans.push(Span::styled(
-            overflow_str,
-            Style::default().fg(palette.dim_text),
-        ));
-        budget = budget.saturating_sub(w);
-        showed_branch_label = true;
-    }
-
-    if !showed_branch_label && (row.meta.is_merge || row.meta.is_fork_point) {
-        if let Some(bi) = row.meta.branch_index {
-            if let Some(name) = branch_index_to_name.get(&bi) {
-                let max_label = budget.min(18);
-                if max_label >= 4 {
-                    let label = truncate_with_ellipsis(name, max_label.saturating_sub(3));
-                    let formatted = format!("[{label}] ");
-                    let w = UnicodeWidthStr::width(formatted.as_str());
-                    let color = palette.branch_color_by_identity(bi, trunk_count);
-                    let style = Style::default().fg(color).add_modifier(Modifier::DIM);
-                    text_spans.push(Span::styled(formatted, style));
-                    budget = budget.saturating_sub(w);
-                }
-            }
-        }
-    }
+    let mut text_spans = label_spans;
 
     let author_str = format!(" {}", row.meta.author);
     let author_w = UnicodeWidthStr::width(author_str.as_str());
@@ -542,7 +525,94 @@ fn build_text_spans(
         budget = budget.saturating_sub(w);
     }
 
-    // Time column — append padding + time
+    time_column_spans(
+        &mut text_spans,
+        &time_str,
+        total_budget,
+        selected,
+        sel_bg,
+        palette,
+    );
+
+    if scroll_x > 0 {
+        text_spans = skip_chars_preserving_style(text_spans, scroll_x);
+    }
+
+    text_spans
+}
+
+fn branch_label_spans(
+    row: &GraphRow,
+    mut budget: usize,
+    trunk_count: usize,
+    branch_index_to_name: &HashMap<usize, String>,
+    palette: &ThemePalette,
+) -> (Vec<Span<'static>>, usize) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let initial_budget = budget;
+    let commit_color_idx = row.cells.first().map(|c| c.color_index).unwrap_or(0);
+    let max_branches = 2;
+    let mut showed_branch_label = false;
+
+    for (i, name) in row.meta.branch_names.iter().enumerate() {
+        if i >= max_branches || budget < 4 {
+            break;
+        }
+        let max_label = budget.min(20);
+        let is_head_branch = row.meta.is_head && i == 0;
+        let prefix = if is_head_branch { "*" } else { "" };
+        let display = format!("{prefix}{name}");
+        let label = truncate_with_ellipsis(&display, max_label.saturating_sub(3));
+        let formatted = format!("[{label}] ");
+        let w = UnicodeWidthStr::width(formatted.as_str());
+        let style = Style::default()
+            .fg(palette.branch_color_by_identity(commit_color_idx, trunk_count))
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(formatted, style));
+        budget = budget.saturating_sub(w);
+        showed_branch_label = true;
+    }
+
+    let overflow = row.meta.branch_names.len().saturating_sub(max_branches);
+    if overflow > 0 && budget >= 5 {
+        let overflow_str = format!("[+{overflow}] ");
+        let w = UnicodeWidthStr::width(overflow_str.as_str());
+        spans.push(Span::styled(
+            overflow_str,
+            Style::default().fg(palette.dim_text),
+        ));
+        budget = budget.saturating_sub(w);
+        showed_branch_label = true;
+    }
+
+    if !showed_branch_label && (row.meta.is_merge || row.meta.is_fork_point) {
+        if let Some(bi) = row.meta.branch_index {
+            if let Some(name) = branch_index_to_name.get(&bi) {
+                let max_label = budget.min(18);
+                if max_label >= 4 {
+                    let label = truncate_with_ellipsis(name, max_label.saturating_sub(3));
+                    let formatted = format!("[{label}] ");
+                    let w = UnicodeWidthStr::width(formatted.as_str());
+                    let color = palette.branch_color_by_identity(bi, trunk_count);
+                    let style = Style::default().fg(color).add_modifier(Modifier::DIM);
+                    spans.push(Span::styled(formatted, style));
+                    budget = budget.saturating_sub(w);
+                }
+            }
+        }
+    }
+
+    (spans, initial_budget - budget)
+}
+
+fn time_column_spans(
+    text_spans: &mut Vec<Span<'static>>,
+    time_str: &str,
+    total_budget: usize,
+    selected: bool,
+    sel_bg: ratatui::style::Color,
+    palette: &ThemePalette,
+) {
     let current_w: usize = text_spans
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
@@ -563,14 +633,8 @@ fn build_text_spans(
         } else {
             Style::default().fg(palette.dim_text)
         };
-        text_spans.push(Span::styled(time_str, time_style));
+        text_spans.push(Span::styled(time_str.to_string(), time_style));
     }
-
-    if scroll_x > 0 {
-        text_spans = skip_chars_preserving_style(text_spans, scroll_x);
-    }
-
-    text_spans
 }
 
 fn skip_chars_preserving_style(spans: Vec<Span<'static>>, skip: usize) -> Vec<Span<'static>> {
